@@ -1,0 +1,35 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form" xmlns:c="/lib/credentials" xmlns:p="/lib/portainer">
+  <div class="portainer-api-form">
+    <p:connection/>
+    <f:entry title="${%Endpoint ID}" field="endpointId">
+      <f:textbox/>
+    </f:entry>
+    <f:entry title="${%Repository URL}" field="repositoryUrl">
+      <f:textbox/>
+    </f:entry>
+    <f:entry title="${%Config path}" field="configPath">
+      <f:textbox default="configs/swarm"/>
+    </f:entry>
+    <f:entry title="${%File glob}" field="fileGlob">
+      <f:textbox default="**/*"/>
+    </f:entry>
+    <f:entry title="${%Git credentials}" field="gitCredentialsId">
+      <c:select/>
+    </f:entry>
+    <f:entry title="${%Repository reference}" field="repositoryReferenceName">
+      <f:textbox default="refs/heads/main"/>
+    </f:entry>
+    <f:advanced title="${%Advanced}">
+      <f:entry title="${%Prune old configs}" field="pruneOld">
+        <f:checkbox/>
+      </f:entry>
+      <f:entry title="${%Validate only}" field="validateOnly">
+        <f:checkbox/>
+      </f:entry>
+      <f:entry title="${%Verbose logging}" field="verboseLogging">
+        <f:checkbox/>
+      </f:entry>
+    </f:advanced>
+  </div>
+</j:jelly>

@@ -1,0 +1,13 @@
+<div>
+  <p>
+    Creates Docker Swarm configs on a Portainer Swarm environment from files in a Git folder.
+    Docker Swarm only. Each config is named <code>{filename}-{hash}</code> from the file bytes. If that name already exists, the step skips it.
+    Shallow-clones on a Jenkins agent (<code>git</code> on PATH); this step requires a workspace / <code>node</code>.
+  </p>
+  <p>
+    Run this step <strong>before</strong> <b>Portainer Stack Deployment</b>. The step sets build environment variables from file names
+    (uppercase, <code>-</code> → <code>_</code>, no extension): <code>rabbitmq-config.json</code> → <code>RABBITMQ_CONFIG</code>
+    (value = Docker config name on Swarm). In the Stack step env field use <code>RABBITMQ_CONFIG=${RABBITMQ_CONFIG}</code>.
+    In compose: <code>name: ${RABBITMQ_CONFIG}</code> with <code>external: true</code>.
+  </p>
+</div>

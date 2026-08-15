@@ -1,0 +1,7 @@
+<div>
+  <p>Stack source types:</p>
+  <ul>
+    <li>Repository — Create the stack from Git if it does not exist on the endpoint; otherwise pull and redeploy the existing Git-backed stack.</li>
+    <li>Manual YAML — Create the stack from inline Compose/Swarm YAML if it does not exist on the endpoint; otherwise update and redeploy the existing file-based stack. Content is validated (YAML mapping with a non-empty <code>services</code> section) before Portainer is called. Git-backed stacks cannot be converted this way.</li>
+  </ul>
+</div>

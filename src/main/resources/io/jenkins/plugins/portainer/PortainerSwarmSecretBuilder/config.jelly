@@ -1,0 +1,64 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form" xmlns:c="/lib/credentials" xmlns:p="/lib/portainer">
+  <div class="portainer-api-form">
+    <p:connection/>
+    <f:entry title="${%Endpoint ID}" field="endpointId">
+      <f:textbox/>
+    </f:entry>
+    <f:entry title="${%Vault}" help="${descriptor.getHelpFile('vaultConnectionMode')}"/>
+    <j:set var="help" value="${null}"/>
+    <f:radioBlock name="vaultConnectionMode" value="inherit" title="${%Inherit from System}"
+                  checked="${instance == null || instance.vaultConnectionMode != 'manual'}">
+      <f:entry>
+        <f:description>${descriptor.vaultInheritSummary}</f:description>
+      </f:entry>
+      <f:entry title="${%Vault KV mount}" field="vaultMount">
+        <f:textbox default="secret"/>
+      </f:entry>
+      <f:entry title="${%Vault path}" field="vaultPath">
+        <f:textbox/>
+      </f:entry>
+      <f:entry title="${%Vault namespace Enterprise}" field="vaultNamespace">
+        <f:textbox/>
+      </f:entry>
+      <f:entry title="${%Vault secret version}" field="vaultVersion">
+        <f:textbox/>
+      </f:entry>
+    </f:radioBlock>
+    <f:radioBlock name="vaultConnectionMode" value="manual" title="${%Manual}"
+                  checked="${instance != null &amp;&amp; instance.vaultConnectionMode == 'manual'}">
+      <f:entry title="${%Vault URL}" field="vaultUrl">
+        <f:textbox/>
+      </f:entry>
+      <f:entry title="${%Vault AppRole credentials}" field="vaultAppRoleCredentialsId">
+        <c:select/>
+      </f:entry>
+      <f:entry title="${%Vault KV mount}" field="vaultMount">
+        <f:textbox default="secret"/>
+      </f:entry>
+      <f:entry title="${%Vault path}" field="vaultPath">
+        <f:textbox/>
+      </f:entry>
+      <f:entry title="${%Vault namespace Enterprise}" field="vaultNamespace">
+        <f:textbox/>
+      </f:entry>
+      <f:entry title="${%Vault secret version}" field="vaultVersion">
+        <f:textbox/>
+      </f:entry>
+    </f:radioBlock>
+    <f:entry title="${%Secret keys}" field="secretKeys">
+      <f:textarea/>
+    </f:entry>
+    <f:advanced title="${%Advanced}">
+      <f:entry title="${%Prune old secrets}" field="pruneOld">
+        <f:checkbox/>
+      </f:entry>
+      <f:entry title="${%Validate only}" field="validateOnly">
+        <f:checkbox/>
+      </f:entry>
+      <f:entry title="${%Verbose logging}" field="verboseLogging">
+        <f:checkbox/>
+      </f:entry>
+    </f:advanced>
+  </div>
+</j:jelly>

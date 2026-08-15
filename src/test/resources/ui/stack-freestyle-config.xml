@@ -1,0 +1,43 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<!--
+  Golden FreeStyle project for Portainer Stack UI smoke.
+  Field names match PortainerStackBuilder XStream / @DataBound* + config.jelly.
+  Classpath: /ui/stack-freestyle-config.xml
+-->
+<project>
+  <description>UiSmoke: Portainer Stack Freestyle configure page</description>
+  <keepDependencies>false</keepDependencies>
+  <properties/>
+  <scm class="hudson.scm.NullSCM"/>
+  <canRoam>true</canRoam>
+  <disabled>false</disabled>
+  <blockBuildWhenDownstreamBuilding>false</blockBuildWhenDownstreamBuilding>
+  <blockBuildWhenUpstreamBuilding>false</blockBuildWhenUpstreamBuilding>
+  <triggers/>
+  <concurrentBuild>false</concurrentBuild>
+  <builders>
+    <io.jenkins.plugins.portainer.PortainerStackBuilder>
+      <endpointId>1</endpointId>
+      <stackType>compose</stackType>
+      <stackName>ui-smoke-stack</stackName>
+      <stackSource>repository</stackSource>
+      <repositoryUrl>https://gitlab.example/group/stack.git</repositoryUrl>
+      <composeFilePath>docker-compose.yml</composeFilePath>
+      <repositoryReferenceName>refs/heads/main</repositoryReferenceName>
+      <gitCredentialsId>git-token-example</gitCredentialsId>
+      <env>IMAGE_TAG=1.0.0
+FEATURE_FLAG=true</env>
+      <prune>false</prune>
+      <repullImageAndRedeploy>false</repullImageAndRedeploy>
+      <mergeEnvWithExisting>false</mergeEnvWithExisting>
+      <portainerConnectionMode>manual</portainerConnectionMode>
+      <portainerUrl>https://portainer.example</portainerUrl>
+      <portainerCredentialsId>portainer-api-example</portainerCredentialsId>
+      <vaultConnectionMode>none</vaultConnectionMode>
+      <verboseLogging>false</verboseLogging>
+      <validateOnly>true</validateOnly>
+    </io.jenkins.plugins.portainer.PortainerStackBuilder>
+  </builders>
+  <publishers/>
+  <buildWrappers/>
+</project>

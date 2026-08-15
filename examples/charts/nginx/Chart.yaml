@@ -1,0 +1,10 @@
+# Helm chart — Portainer Helm Deployment (portainerHelm)
+# Package / publish this chart to a Helm repository; point portainerHelm `repo` + `chart: nginx` at it.
+# Image: nginx:alpine (same fixture as compose / swarm / Kubernetes examples).
+
+apiVersion: v2
+name: nginx
+description: Minimal nginx:alpine chart for Portainer / CI tests
+type: application
+version: 0.1.0
+appVersion: "1.27-alpine"

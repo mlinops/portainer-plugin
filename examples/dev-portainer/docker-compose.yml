@@ -1,0 +1,27 @@
+# Local Portainer for plugin testing (default self-signed TLS includes localhost).
+# Usage:
+#   cd examples/dev-portainer
+#   docker compose up -d
+# UI/API HTTP:  http://localhost:9000
+# UI/API HTTPS: https://localhost:9443  (self-signed — browser warning OK)
+#
+# From Jenkins in Docker Desktop: http://host.docker.internal:9000
+# (or https://host.docker.internal:9443 — add CA / accept self-signed in JDK if needed)
+
+services:
+  portainer:
+    image: portainer/portainer-ce:2.39.3
+    container_name: portainer-dev
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9443:9443"
+      - "8000:8000"
+    volumes:
+      - portainer_dev_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Default self-signed cert on :9443 — Helm internal self-call to localhost works.
+    # Do NOT mount a corporate/internal-CA-only cert here if you want to test Helm API.
+
+volumes:
+  portainer_dev_data:

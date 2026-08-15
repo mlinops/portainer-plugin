@@ -1,0 +1,10 @@
+<div>
+  <p>Readiness line for Inherit from System (HashiCorp Vault Plugin):</p>
+  <ul>
+    <li><code>Vault Plugin is not installed.</code> — plugin missing or inactive on this controller.</li>
+    <li><code>Vault Plugin is not configured.</code> — plugin present but System Vault URL/credentials are incomplete.</li>
+    <li><code>Vault Plugin is present and configured.</code> — ready to use Inherit on this step.</li>
+  </ul>
+  <p>When not ready: install and enable the HashiCorp Vault Plugin, then set Manage Jenkins → System → Vault (URL and credentials). Folder/job policy templates still come from that plugin at build time.</p>
+  <p>Soft dependency — Manual and Not connected work without the Vault Plugin.</p>
+</div>

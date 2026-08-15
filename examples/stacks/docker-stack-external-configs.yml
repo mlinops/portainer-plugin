@@ -1,0 +1,33 @@
+# Swarm stack with external Docker configs/secrets.
+# Config names: portainerStackConfig env. Secret names: portainerStackSecret env.
+# Do not use ${VAR:-unhashed-name} fallbacks — they point at names that are not on Swarm.
+
+version: "3.8"
+
+configs:
+  rabbitmq_config:
+    external: true
+    name: ${RABBITMQ_CONFIG}
+  enabled_plugins:
+    external: true
+    name: ${ENABLED_PLUGINS}
+
+secrets:
+  rabbitmq_signing_key:
+    external: true
+    name: ${RABBITMQ_SIGNING_KEY}
+
+services:
+  rabbitmq:
+    image: registry.example/rabbitmq:${IMAGE_TAG}
+    configs:
+      - source: rabbitmq_config
+        target: /etc/rabbitmq/rabbitmq.conf
+      - source: enabled_plugins
+        target: /etc/rabbitmq/enabled_plugins
+    secrets:
+      - source: rabbitmq_signing_key
+        target: /etc/rabbitmq/keycloak-public.pem
+    deploy:
+      replicas: 1
+

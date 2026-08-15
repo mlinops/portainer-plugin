@@ -1,0 +1,17 @@
+# Docker Swarm stack — Portainer stackType: swarm
+# Point composeFilePath at this file (path relative to the Git repo root).
+# Host port 8080 avoids clashing with Jenkins on 80 when testing locally.
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - target: 80
+        published: 8080
+        protocol: tcp
+        mode: ingress
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure

@@ -1,0 +1,20 @@
+<div>
+  <p>
+    Creates Docker Swarm secrets from selected HashiCorp Vault KV v2 keys.
+    The secret is created with a name pattern of <code>{key}-{hash}</code> of the value bytes.
+  </p>
+  <p>Statuses:</p>
+  <ul>
+    <li><code>created</code> — the secret has been created.</li>
+    <li><code>skipped</code> — the secret already exists, skipping the step.</li>
+  </ul>
+  <p>Secret values are never written to the build log.</p>
+  <p>
+    The step sets build environment variables (uppercase, <code>-</code> → <code>_</code>):
+  </p>
+  <ul>
+    <li><code>rabbitmq-signing-key</code> → <code>RABBITMQ_SIGNING_KEY</code></li>
+    <li><code>rabbitmq_default_user</code> → <code>RABBITMQ_DEFAULT_USER</code></li>
+  </ul>
+  <p>Use these variables later in the Portainer Stack Deployment step.</p>
+</div>

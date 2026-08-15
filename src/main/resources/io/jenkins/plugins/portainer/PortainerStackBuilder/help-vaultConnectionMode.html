@@ -1,0 +1,9 @@
+<div>
+  <p>Vault connection types:</p>
+  <ul>
+    <li>Not connected (default): disable Vault. No Vault HTTP or Vault Plugin calls; Manual fields and path are ignored. Stack <code>Env[]</code> uses step <code>env</code> only.</li>
+    <li>Inherit from System (optional): use the official HashiCorp Vault Plugin System configuration. Soft dependency — install the Vault Plugin for Inherit.</li>
+    <li>Manual (optional): self-contained HTTP AppRole on this step (<code>vaultUrl</code> + Username/Password). Vault Plugin is not required.</li>
+  </ul>
+  <p>Path and KV mount stay on this step for Inherit/Manual. Vault wins over step text env on key collisions.</p>
+</div>

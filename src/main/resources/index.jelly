@@ -1,0 +1,10 @@
+<?jelly escape-by-default='true'?>
+<div>
+  Connect Jenkins to Portainer via the Portainer API (Access token).
+  Global configuration under Manage Jenkins → System (<b>Portainer</b>); Freestyle/Pipeline
+  steps: <b>Portainer Stack Deployment</b> (<code>portainerStack</code>),
+  <b>Portainer Stack Config</b> (<code>portainerStackConfig</code>),
+  <b>Portainer Stack Secret</b> (<code>portainerStackSecret</code>),
+  <b>Portainer Manifest Deployment</b> (<code>portainerManifest</code>),
+  <b>Portainer Helm Deployment</b> (<code>portainerHelm</code>).
+</div>

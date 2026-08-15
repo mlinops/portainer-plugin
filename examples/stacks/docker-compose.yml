@@ -1,0 +1,10 @@
+# Docker Compose (standalone) — Portainer stackType: compose
+# Point composeFilePath at this file (path relative to the Git repo root).
+# Host port 8080 avoids clashing with Jenkins on 80 when testing locally.
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    restart: unless-stopped

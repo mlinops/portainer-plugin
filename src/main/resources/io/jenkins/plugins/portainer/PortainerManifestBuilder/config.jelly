@@ -1,0 +1,49 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form" xmlns:c="/lib/credentials" xmlns:p="/lib/portainer">
+  <div class="portainer-api-form">
+    <p:connection/>
+    <f:entry title="${%Endpoint ID}" field="endpointId">
+      <f:textbox/>
+    </f:entry>
+    <f:entry title="${%Stack name}" field="stackName">
+      <f:textbox/>
+    </f:entry>
+    <f:entry title="${%Namespace}" field="namespace">
+      <f:textbox default="default"/>
+    </f:entry>
+    <f:entry title="${%Manifest source}" help="${descriptor.getHelpFile('stackSource')}"/>
+    <j:set var="help" value="${null}"/>
+    <f:radioBlock name="stackSource" value="repository" title="${%Repository}"
+                  checked="${instance == null || instance.stackSource != 'yaml'}">
+      <f:entry title="${%Repository URL}" field="repositoryUrl">
+        <f:textbox/>
+      </f:entry>
+      <f:entry title="${%Manifest file path}" field="manifestFilePath">
+        <f:textbox default="manifest.yaml"/>
+      </f:entry>
+      <f:entry title="${%Git credentials}" field="gitCredentialsId">
+        <c:select/>
+      </f:entry>
+      <f:entry title="${%Repository reference}" field="repositoryReferenceName">
+        <f:textbox default="refs/heads/main"/>
+      </f:entry>
+    </f:radioBlock>
+    <f:radioBlock name="stackSource" value="yaml" title="${%Manual YAML}"
+                  checked="${instance != null &amp;&amp; instance.stackSource == 'yaml'}">
+      <f:entry title="${%Manifest YAML}" field="stackFileContent">
+        <f:textarea/>
+      </f:entry>
+    </f:radioBlock>
+    <f:advanced title="${%Advanced}">
+      <f:entry title="${%Ensure namespace}" field="ensureNamespace">
+        <f:checkbox checked="${instance == null || instance.ensureNamespace}"/>
+      </f:entry>
+      <f:entry title="${%Validate only}" field="validateOnly">
+        <f:checkbox/>
+      </f:entry>
+      <f:entry title="${%Verbose logging}" field="verboseLogging">
+        <f:checkbox/>
+      </f:entry>
+    </f:advanced>
+  </div>
+</j:jelly>

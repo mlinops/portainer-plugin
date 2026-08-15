@@ -1,0 +1,22 @@
+<?jelly escape-by-default='true'?>
+<!-- Shared Portainer connection for Stack / Manifest / Helm / Secret / Config. -->
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form" xmlns:c="/lib/credentials">
+  <f:entry title="${%Portainer}" help="${descriptor.getHelpFile('portainerConnectionMode')}"/>
+  <!-- radioBlock uses ${help} from scope; clear so option rows do not inherit section help -->
+  <j:set var="help" value="${null}"/>
+  <f:radioBlock name="portainerConnectionMode" value="inherit" title="${%Inherit from System}"
+                checked="${instance == null || instance.portainerConnectionMode != 'manual'}">
+    <f:entry>
+      <f:description>${descriptor.portainerConnectionSummary}</f:description>
+    </f:entry>
+  </f:radioBlock>
+  <f:radioBlock name="portainerConnectionMode" value="manual" title="${%Manual}"
+                checked="${instance != null &amp;&amp; instance.portainerConnectionMode == 'manual'}">
+    <f:entry title="${%Portainer URL}" field="portainerUrl">
+      <f:textbox clazz="required"/>
+    </f:entry>
+    <f:entry title="${%API key credentials}" field="portainerCredentialsId">
+      <c:select/>
+    </f:entry>
+  </f:radioBlock>
+</j:jelly>

@@ -1,0 +1,12 @@
+<div>
+  <p>Optional environment variables for the stack, one per line.</p>
+  <ul>
+    <li><code>KEY=VALUE</code> — literal or with <code>${VAR}</code> from the build environment</li>
+    <li><code>KEY</code> alone — same as <code>KEY=${KEY}</code> (copy from the build environment)</li>
+  </ul>
+  <p>Blank lines and lines starting with <code>#</code> are ignored.</p>
+  <pre>RABBITMQ_ERLANG_COOKIE
+RABBITMQ_DEFAULT_USER
+IMAGE_TAG=1.2.3</pre>
+  <p>If Vault overlay is configured (Inherit or Manual), Vault values win for the same keys. When Vault is Not connected, only these step variables are sent (unless <b>Merge with existing stack env</b> is enabled on update — then Portainer’s current Env is the base and step keys overlay it).</p>
+</div>
