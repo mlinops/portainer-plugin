@@ -1,14 +1,14 @@
-# SonarQube Cloud analysis (Maven).
+# SonarQube Cloud analysis (Maven + JaCoCo coverage).
 # Requires repository secret: SONAR_TOKEN
 # Project key / organization must match SonarQube Cloud (see tutorial / Administration → Analysis Method).
 # Docs: https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/ci-based-analysis/github-actions-for-sonarcloud/
+# Coverage: https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/test-coverage/java-test-coverage/
 ---
 name: SonarQube Cloud
 
 on:
   push:
     branches:
-      - dev
       - main
   pull_request:
     types: [opened, synchronize, reopened]
@@ -41,9 +41,11 @@ jobs:
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
 
-      - name: Build and analyze
+      - name: Build, test, coverage, and analyze
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        # skipTests: InjectedTest suite is heavy; drop -DskipTests when you want coverage.
-        # organization / projectKey / host.url come from pom.xml <sonar.*> properties.
-        run: mvn -B -DskipTests package org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+        # Must run tests + -Pcoverage so jacoco.xml exists; -DskipTests yields 0% Coverage on New Code.
+        # organization / projectKey / host.url / jacoco path come from pom.xml <sonar.*> properties.
+        run: >
+          mvn -B -Pcoverage verify
+          org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
