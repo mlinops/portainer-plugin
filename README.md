@@ -1,5 +1,7 @@
 # Portainer
 
+[![Quality gate status](https://sonarcloud.io/api/project_badges/measure?project=mlinops_portainer-plugin&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=mlinops_portainer-plugin)
+
 Deploy **Docker Compose / Swarm** stacks and **Kubernetes** workloads from Jenkins through the [Portainer](https://www.portainer.io/) API — one Access token, Freestyle or Pipeline, clear build summaries.
 
 **Who it’s for:** platform and CI engineers who already run Portainer for day-2 ops and want Jenkins jobs to create or update stacks, Swarm configs/secrets, manifests, and Helm releases without hand-driving the Portainer UI.
