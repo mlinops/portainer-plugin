@@ -281,7 +281,7 @@ final class VaultPluginInherit {
             throws ReflectiveOperationException {
         Integer engineVersion =
                 (Integer) vaultConfigurationClass.getMethod("getEngineVersion").invoke(configuration);
-        return engineVersion == null ? 2 : engineVersion;
+        return engineVersion == null ? Integer.valueOf(2) : engineVersion;
     }
 
     private static void logInheritRead(
