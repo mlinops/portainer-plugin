@@ -242,8 +242,14 @@ final class PortainerCredentials {
                 Collections.emptyList());
     }
 
+    /**
+     * Ephemeral Vault AppRole ids resolved from Credentials at runtime.
+     * Not a Stapler/DataBound type — job XML stores only {@code vaultAppRoleCredentialsId}.
+     */
     static final class AppRoleIds {
         final String roleId;
+        /** Resolved secret_id; never persisted as a config field. */
+        @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
         final String secretId;
 
         AppRoleIds(String roleId, String secretId) {
@@ -252,8 +258,14 @@ final class PortainerCredentials {
         }
     }
 
+    /**
+     * Ephemeral Git username/password (or oauth2 + token) resolved from Credentials at runtime.
+     * Not a Stapler/DataBound type — job XML stores only {@code gitCredentialsId}.
+     */
     static final class GitAuth {
         final String username;
+        /** Resolved credential secret; never persisted as a config field. */
+        @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
         final String password;
 
         GitAuth(String username, String password) {

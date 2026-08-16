@@ -43,8 +43,7 @@ import java.util.logging.Logger;
 public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildStep {
 
     /**
-     * Test hook: when set, Vault is not called.
-     * Clear in {@code @AfterEach}; do not add further static volatiles without an inject seam.
+     * When non-null, Vault HTTP is skipped and this map supplies key → value for the step.
      */
     static volatile Map<String, String> testVaultOverride;
 
@@ -55,6 +54,11 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
 
     private final String endpointId;
 
+    /**
+     * Vault KV key <em>names</em> to copy (one per line), not secret values.
+     * Values are loaded from Vault at runtime and never persisted in this field.
+     */
+    @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
     private String secretKeys = "";
     private String vaultConnectionMode;
     private String vaultUrl;

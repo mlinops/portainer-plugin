@@ -1557,6 +1557,8 @@ final class PortainerClient implements AutoCloseable {
         final String composeFile;
         final String repositoryReferenceName;
         final String gitUsername;
+        /** Ephemeral Portainer API payload; not Jenkins job config. */
+        @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
         final String gitPassword;
         final List<EnvPair> env;
 
@@ -1585,6 +1587,8 @@ final class PortainerClient implements AutoCloseable {
         final boolean repullImageAndRedeploy;
         final String repositoryReferenceName;
         final String gitUsername;
+        /** Ephemeral Portainer API payload; not Jenkins job config. */
+        @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
         final String gitPassword;
 
         GitRedeployRequest(
@@ -1656,6 +1660,8 @@ final class PortainerClient implements AutoCloseable {
         final String repositoryReferenceName;
         final String namespace;
         final String gitUsername;
+        /** Ephemeral Portainer API payload; not Jenkins job config. */
+        @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
         final String gitPassword;
 
         KubernetesFromGitRequest(
@@ -1691,6 +1697,8 @@ final class PortainerClient implements AutoCloseable {
     static final class KubernetesGitUpdateRequest {
         final String repositoryReferenceName;
         final String gitUsername;
+        /** Ephemeral Portainer API payload; not Jenkins job config. */
+        @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
         final String gitPassword;
 
         KubernetesGitUpdateRequest(

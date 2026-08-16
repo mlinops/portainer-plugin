@@ -116,8 +116,8 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     private String vaultVersion;
 
     /**
-     * When true, mirror DEBUG HTTP/timing lines to the build console (still {@code Portainer:} prefix,
-     * no level words). Default false — DEBUG stays on JUL FINE only.
+     * When true, also write DEBUG HTTP/timing lines to the build console.
+     * Default false — DEBUG stays on JUL FINE only.
      */
     private boolean verboseLogging;
 

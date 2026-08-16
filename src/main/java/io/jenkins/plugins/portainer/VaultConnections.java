@@ -15,10 +15,7 @@ import java.io.IOException;
  */
 final class VaultConnections {
 
-    /**
-     * Test hook: skip network Vault preflight (or set Secret {@code testVaultOverride}).
-     * Clear in {@code @AfterEach}; prefer inject seams over new static volatiles.
-     */
+    /** When true, Vault network preflight is skipped (unit tests). */
     static volatile boolean testSkipPreflight;
 
     private VaultConnections() {

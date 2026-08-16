@@ -49,6 +49,10 @@
         <ban-junit4-imports.skip>false</ban-junit4-imports.skip>
         <ban-deprecated-stapler.skip>false</ban-deprecated-stapler.skip>
         <ban-commons-lang-2.skip>false</ban-commons-lang-2.skip>
+        <!-- SonarQube Cloud — must match the project created in sonarcloud.io -->
+        <sonar.organization>mlinops</sonar.organization>
+        <sonar.projectKey>mlinops_portainer-plugin</sonar.projectKey>
+        <sonar.host.url>https://sonarcloud.io</sonar.host.url>
     </properties>
 
     <repositories>

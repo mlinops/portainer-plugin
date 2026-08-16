@@ -353,8 +353,13 @@ final class PortainerConnections {
         return abortOn(log, () -> PortainerCredentials.resolveGitAuth(credentialsId, item));
     }
 
+    /**
+     * Ephemeral Portainer session: connection + API key resolved from Credentials at runtime.
+     * Not DataBound — jobs/System store credentialsId only.
+     */
     static final class Authenticated {
         final ResolvedConnection connection;
+        @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
         final String apiKey;
 
         Authenticated(ResolvedConnection connection, String apiKey) {

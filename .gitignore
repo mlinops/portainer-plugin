@@ -56,3 +56,8 @@ work/
 reports/
 ui-baselines/
 _AI.md
+
+# Accidental local binaries / Docker CLI dumps
+scriptsbindocker
+docker.tgz
+/docker/

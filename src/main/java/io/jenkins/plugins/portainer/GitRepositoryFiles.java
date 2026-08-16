@@ -26,16 +26,10 @@ import java.util.function.Function;
  */
 final class GitRepositoryFiles {
 
-    /**
-     * Test hook: when set, {@link #readFile} returns its result instead of cloning.
-     * Clear in {@code @AfterEach}; do not add further static hooks without an inject seam.
-     */
+    /** When non-null, {@link #readFile} returns this result instead of cloning. */
     static volatile Function<FetchRequest, String> testOverride;
 
-    /**
-     * Test hook: when set, {@link #listConfigFiles} returns its result instead of cloning.
-     * Clear in {@code @AfterEach}.
-     */
+    /** When non-null, {@link #listConfigFiles} returns this result instead of cloning. */
     static volatile Function<ListRequest, List<SwarmConfigFile>> listTestOverride;
 
     private static final String ASKPASS_USERNAME_FILE = "askpass.username";
