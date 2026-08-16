@@ -34,6 +34,7 @@ final class GitRepositoryFiles {
 
     private static final String ASKPASS_USERNAME_FILE = "askpass.username";
     private static final String ASKPASS_PASSWORD_FILE = "askpass.password";
+    private static final String UTF_8 = StandardCharsets.UTF_8.name();
 
     private GitRepositoryFiles() {
     }
@@ -141,66 +142,94 @@ final class GitRepositoryFiles {
         String repo = GitRepositoryUrl.normalize(repositoryUrl);
         String dir = SwarmConfigNaming.normalizeConfigPath(configPath);
         String glob = SwarmConfigNaming.normalizeFileGlob(fileGlob);
-        String ref = reference == null || reference.isBlank()
-                ? PortainerStackBuilder.DEFAULT_REPOSITORY_REFERENCE
-                : reference.trim();
+        String ref = defaultGitReference(reference);
 
         Function<ListRequest, List<SwarmConfigFile>> override = listTestOverride;
         if (override != null) {
             return override.apply(new ListRequest(repo, ref, dir, glob));
         }
         ConnectionTester.assertHostAllowed(repo, ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
-        if (workspace == null) {
-            throw new IOException("Workspace is required to fetch Swarm configs from Git.");
-        }
-        if (launcher == null) {
-            throw new IOException("Launcher is required to fetch Swarm configs from Git.");
-        }
+        requireCloneContext(workspace, launcher, "Swarm configs");
 
         FilePath tmp = workspace.createTempDir("portainer-swarm-configs", null);
         try {
             FilePath checkout = shallowClone(repo, ref, auth, tmp, launcher, listener, "config");
-            FilePath root = checkout.child(dir);
-            if (!root.exists()) {
-                throw new IOException("Config path not found in repository: " + dir);
-            }
-            if (!root.isDirectory()) {
-                throw new IOException("Config path is not a directory: " + dir);
-            }
-            FilePath[] matches = root.list(glob, "");
-            if (matches == null || matches.length == 0) {
-                return Collections.emptyList();
-            }
-            List<SwarmConfigFile> out = new ArrayList<>();
-            for (FilePath file : matches) {
-                if (file == null || !file.exists() || file.isDirectory()) {
-                    continue;
-                }
-                String normalized = relativeRemotePath(root, file);
-                if (normalized.isEmpty() || normalized.endsWith("/")) {
-                    continue;
-                }
-                String baseName = normalized.substring(normalized.lastIndexOf('/') + 1);
-                if (baseName.startsWith(".")) {
-                    continue;
-                }
-                byte[] content;
-                try (InputStream in = file.read()) {
-                    content = in.readAllBytes();
-                }
-                out.add(new SwarmConfigFile(normalized, content));
-            }
-            out.sort((a, b) -> a.relativePath.compareTo(b.relativePath));
-            return out;
+            return listMatchingConfigFiles(requireConfigDirectory(checkout.child(dir), dir), glob);
         } finally {
-            try {
-                tmp.deleteRecursive();
-            } catch (IOException | InterruptedException cleanup) {
-                if (cleanup instanceof InterruptedException) {
-                    Thread.currentThread().interrupt();
-                }
-                // best-effort cleanup
+            deleteTempQuietly(tmp);
+        }
+    }
+
+    private static String defaultGitReference(String reference) {
+        return reference == null || reference.isBlank()
+                ? PortainerStackBuilder.DEFAULT_REPOSITORY_REFERENCE
+                : reference.trim();
+    }
+
+    private static void requireCloneContext(FilePath workspace, Launcher launcher, String label)
+            throws IOException {
+        if (workspace == null) {
+            throw new IOException("Workspace is required to fetch " + label + " from Git.");
+        }
+        if (launcher == null) {
+            throw new IOException("Launcher is required to fetch " + label + " from Git.");
+        }
+    }
+
+    private static FilePath requireConfigDirectory(FilePath root, String dir)
+            throws IOException, InterruptedException {
+        if (!root.exists()) {
+            throw new IOException("Config path not found in repository: " + dir);
+        }
+        if (!root.isDirectory()) {
+            throw new IOException("Config path is not a directory: " + dir);
+        }
+        return root;
+    }
+
+    private static List<SwarmConfigFile> listMatchingConfigFiles(FilePath root, String glob)
+            throws IOException, InterruptedException {
+        FilePath[] matches = root.list(glob, "");
+        if (matches == null || matches.length == 0) {
+            return Collections.emptyList();
+        }
+        List<SwarmConfigFile> out = new ArrayList<>();
+        for (FilePath file : matches) {
+            SwarmConfigFile entry = toConfigFile(root, file);
+            if (entry != null) {
+                out.add(entry);
             }
+        }
+        out.sort((a, b) -> a.relativePath.compareTo(b.relativePath));
+        return out;
+    }
+
+    private static SwarmConfigFile toConfigFile(FilePath root, FilePath file)
+            throws IOException, InterruptedException {
+        if (file == null || !file.exists() || file.isDirectory()) {
+            return null;
+        }
+        String normalized = relativeRemotePath(root, file);
+        if (normalized.isEmpty() || normalized.endsWith("/")) {
+            return null;
+        }
+        String baseName = normalized.substring(normalized.lastIndexOf('/') + 1);
+        if (baseName.startsWith(".")) {
+            return null;
+        }
+        try (InputStream in = file.read()) {
+            return new SwarmConfigFile(normalized, in.readAllBytes());
+        }
+    }
+
+    private static void deleteTempQuietly(FilePath tmp) {
+        try {
+            tmp.deleteRecursive();
+        } catch (IOException | InterruptedException cleanup) {
+            if (cleanup instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            // best-effort cleanup
         }
     }
 
@@ -320,10 +349,10 @@ final class GitRepositoryFiles {
         if (auth == null) {
             throw new IllegalArgumentException("GitAuth is required to write askpass");
         }
-        tmp.child(ASKPASS_USERNAME_FILE).write(auth.username == null ? "" : auth.username, "UTF-8");
-        tmp.child(ASKPASS_PASSWORD_FILE).write(auth.password == null ? "" : auth.password, "UTF-8");
+        tmp.child(ASKPASS_USERNAME_FILE).write(auth.username == null ? "" : auth.username, UTF_8);
+        tmp.child(ASKPASS_PASSWORD_FILE).write(auth.password == null ? "" : auth.password, UTF_8);
         FilePath askpass = tmp.child(unix ? "askpass.sh" : "askpass.bat");
-        askpass.write(askpassScriptContent(unix), "UTF-8");
+        askpass.write(askpassScriptContent(unix), UTF_8);
         if (unix) {
             askpass.chmod(0755);
         }

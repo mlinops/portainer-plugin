@@ -33,20 +33,7 @@ final class ConnectionMode {
         if (raw == null || raw.isBlank()) {
             return defaultMode;
         }
-        String v = raw.trim();
-        // Form validation / odd clients may pass radioBlock JSON as a string.
-        if (v.startsWith("{") && v.contains(RADIO_VALUE)) {
-            try {
-                JSONObject o = JSONObject.fromObject(v);
-                Object mode = o.opt(RADIO_VALUE);
-                if (mode != null && !JSONNull.getInstance().equals(mode)) {
-                    v = String.valueOf(mode).trim();
-                }
-            } catch (RuntimeException ignored) {
-                // not JSON — fall through
-            }
-        }
-        v = v.toLowerCase(Locale.ROOT);
+        String v = unwrapRadioBlockMode(raw.trim()).toLowerCase(Locale.ROOT);
         if (INHERIT.equals(v) || MANUAL.equals(v) || NONE.equals(v)) {
             return v;
         }
@@ -55,6 +42,29 @@ final class ConnectionMode {
             return NONE;
         }
         return defaultMode;
+    }
+
+    /**
+     * If {@code raw} looks like Freestyle radioBlock JSON, return the selected {@link #RADIO_VALUE};
+     * otherwise return {@code raw} unchanged.
+     */
+    static String unwrapRadioBlockMode(String raw) {
+        if (raw == null || !raw.startsWith("{") || !raw.contains(RADIO_VALUE)) {
+            return raw;
+        }
+        try {
+            JSONObject o = JSONObject.fromObject(raw);
+            Object mode = o.opt(RADIO_VALUE);
+            if (mode != null && !JSONNull.getInstance().equals(mode)) {
+                String s = String.valueOf(mode).trim();
+                if (!s.isEmpty()) {
+                    return s;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // not JSON — fall through
+        }
+        return raw;
     }
 
     static boolean isManual(String mode) {

@@ -1,6 +1,5 @@
 package io.jenkins.plugins.portainer;
 
-import net.sf.json.JSONNull;
 import net.sf.json.JSONObject;
 
 import java.util.Locale;
@@ -28,19 +27,7 @@ final class StackSource {
         if (raw == null || raw.isBlank()) {
             return defaultMode;
         }
-        String v = raw.trim();
-        if (v.startsWith("{") && v.contains(ConnectionMode.RADIO_VALUE)) {
-            try {
-                JSONObject o = JSONObject.fromObject(v);
-                Object mode = o.opt(ConnectionMode.RADIO_VALUE);
-                if (mode != null && !JSONNull.getInstance().equals(mode)) {
-                    v = String.valueOf(mode).trim();
-                }
-            } catch (RuntimeException ignored) {
-                // not JSON — fall through
-            }
-        }
-        v = v.toLowerCase(Locale.ROOT);
+        String v = ConnectionMode.unwrapRadioBlockMode(raw.trim()).toLowerCase(Locale.ROOT);
         if (REPOSITORY.equals(v) || YAML.equals(v)) {
             return v;
         }
