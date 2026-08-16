@@ -35,6 +35,22 @@ final class PortainerClient implements AutoCloseable {
 
     private static final Logger LOGGER = Logger.getLogger(PortainerClient.class.getName());
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    /** Substring matched in Portainer RBAC / HTTP 403 error bodies. */
+    private static final String LACKS_PERMISSION = "lacks permission";
+    private static final String API_ENDPOINTS = "/api/endpoints/";
+    private static final String API_STACKS = "/api/stacks/";
+    private static final String QUERY_ENDPOINT_ID = "?endpointId=";
+    private static final String HTTP_STATUS_PREFIX = "HTTP ";
+    private static final String HTTP_DELETE = "DELETE";
+    private static final String MSG_REQUEST = "request";
+    private static final String JSON_STACK_NAME = "StackName";
+    private static final String JSON_STACK_FILE_CONTENT = "StackFileContent";
+    private static final String JSON_NAMESPACE = "Namespace";
+    private static final String JSON_LABELS = "Labels";
+    private static final String JSON_REPOSITORY_REFERENCE_NAME = "RepositoryReferenceName";
+    private static final String JSON_REPOSITORY_AUTHENTICATION = "RepositoryAuthentication";
+    private static final String JSON_REPOSITORY_USERNAME = "RepositoryUsername";
+    private static final String JSON_REPOSITORY_PASSWORD = "RepositoryPassword";
 
     private final int connectTimeoutMs;
     private final int readTimeoutMs;
@@ -70,40 +86,59 @@ final class PortainerClient implements AutoCloseable {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         String versionLabel;
         try {
-            JsonNode status = httpJson("GET", base + "/api/status", apiKey, null, null);
-            String version = text(status, "Version");
-            if (version.isBlank()) {
-                version = text(status, "version");
-            }
-            versionLabel = !version.isBlank() ? "Portainer v" + version : "Portainer status OK";
+            versionLabel = versionLabelFromStatus(httpJson("GET", base + "/api/status", apiKey, null, null));
         } catch (IOException statusEx) {
-            String msg = statusEx.getMessage() == null ? "" : statusEx.getMessage();
-            if (isAuthFailureMessage(msg) || isConnectivityMessage(msg)) {
-                throw statusEx;
-            }
-            LOGGER.log(Level.FINE, "GET /api/status failed, trying /api/endpoints: {0}", statusEx.toString());
-            httpJson("GET", base + "/api/endpoints", apiKey, null, null);
-            return new ProbeDetails("Portainer endpoints reachable");
+            return probeAccessWithoutStatus(base, apiKey, statusEx);
         }
+        return confirmEndpointsAccess(base, apiKey, versionLabel);
+    }
 
+    private ProbeDetails probeAccessWithoutStatus(String base, String apiKey, IOException statusEx)
+            throws IOException {
+        String msg = exceptionMessage(statusEx);
+        if (isAuthFailureMessage(msg) || isConnectivityMessage(msg)) {
+            throw statusEx;
+        }
+        LOGGER.log(Level.FINE, "GET /api/status failed, trying /api/endpoints: {0}", statusEx.toString());
+        httpJson("GET", base + "/api/endpoints", apiKey, null, null);
+        return new ProbeDetails("Portainer endpoints reachable");
+    }
+
+    private ProbeDetails confirmEndpointsAccess(String base, String apiKey, String versionLabel)
+            throws IOException {
         try {
             httpJson("GET", base + "/api/endpoints", apiKey, null, null);
             return new ProbeDetails(versionLabel);
         } catch (IOException permEx) {
-            String msg = permEx.getMessage() == null ? "" : permEx.getMessage();
-            if (isConnectivityMessage(msg)
-                    || msg.contains("401")
-                    || msg.toLowerCase(Locale.ROOT).contains("invalid or missing")) {
-                throw permEx;
-            }
-            if (msg.contains("403") || msg.toLowerCase(Locale.ROOT).contains("lacks permission")) {
-                throw new IOException(
-                        "Portainer reachable but API key lacks permission to list endpoints (GET /api/endpoints)"
-                                + detailSuffix(msg),
-                        permEx);
-            }
-            throw permEx;
+            throw mapEndpointsProbeFailure(permEx);
         }
+    }
+
+    private static String versionLabelFromStatus(JsonNode status) {
+        String version = text(status, "Version");
+        if (version.isBlank()) {
+            version = text(status, "version");
+        }
+        return !version.isBlank() ? "Portainer v" + version : "Portainer status OK";
+    }
+
+    private static IOException mapEndpointsProbeFailure(IOException permEx) {
+        String msg = exceptionMessage(permEx);
+        String lower = msg.toLowerCase(Locale.ROOT);
+        if (isConnectivityMessage(msg) || msg.contains("401") || lower.contains("invalid or missing")) {
+            return permEx;
+        }
+        if (msg.contains("403") || lower.contains(LACKS_PERMISSION)) {
+            return new IOException(
+                    "Portainer reachable but API key lacks permission to list endpoints (GET /api/endpoints)"
+                            + detailSuffix(msg),
+                    permEx);
+        }
+        return permEx;
+    }
+
+    private static String exceptionMessage(Throwable t) {
+        return t.getMessage() == null ? "" : t.getMessage();
     }
 
     /** Result of {@link #probeAccess}: primary UI label only (no environment count). */
@@ -127,7 +162,7 @@ final class PortainerClient implements AutoCloseable {
     JsonNode getEndpoint(String baseUrl, String apiKey, int endpointId) throws IOException {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         try {
-            return httpJson("GET", base + "/api/endpoints/" + endpointId, apiKey, null, null);
+            return httpJson("GET", base + API_ENDPOINTS + endpointId, apiKey, null, null);
         } catch (IOException e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
             if (msg.contains("404")) {
@@ -178,7 +213,7 @@ final class PortainerClient implements AutoCloseable {
     String resolveSwarmId(String baseUrl, String apiKey, int endpointId) throws IOException {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         JsonNode swarm = httpJson(
-                "GET", base + "/api/endpoints/" + endpointId + "/docker/swarm", apiKey, null, null);
+                "GET", base + API_ENDPOINTS + endpointId + "/docker/swarm", apiKey, null, null);
         String id = text(swarm, "ID");
         if (id.isBlank()) {
             id = text(swarm, "Id");
@@ -234,7 +269,7 @@ final class PortainerClient implements AutoCloseable {
             throw new IllegalArgumentException("stackId must be >= 0");
         }
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        JsonNode stack = httpJson("GET", base + "/api/stacks/" + stackId, apiKey, null, "get stack env");
+        JsonNode stack = httpJson("GET", base + API_STACKS + stackId, apiKey, null, "get stack env");
         return parseStackEnv(stack);
     }
 
@@ -274,7 +309,7 @@ final class PortainerClient implements AutoCloseable {
             int endpointId,
             GitRedeployRequest request) throws IOException {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        String url = base + "/api/stacks/" + stackId + "/git/redeploy?endpointId=" + endpointId;
+        String url = base + API_STACKS + stackId + "/git/redeploy?endpointId=" + endpointId;
         ObjectNode body = MAPPER.createObjectNode();
         if (request.env != null && !request.env.isEmpty()) {
             body.set("Env", toEnvArray(request.env));
@@ -286,15 +321,15 @@ final class PortainerClient implements AutoCloseable {
             body.put("RepullImageAndRedeploy", true);
         }
         if (request.repositoryReferenceName != null && !request.repositoryReferenceName.isBlank()) {
-            body.put("RepositoryReferenceName", request.repositoryReferenceName.trim());
+            body.put(JSON_REPOSITORY_REFERENCE_NAME, request.repositoryReferenceName.trim());
         }
         if (request.gitUsername != null || request.gitPassword != null) {
-            body.put("RepositoryAuthentication", true);
+            body.put(JSON_REPOSITORY_AUTHENTICATION, true);
             if (request.gitUsername != null) {
-                body.put("RepositoryUsername", request.gitUsername);
+                body.put(JSON_REPOSITORY_USERNAME, request.gitUsername);
             }
             if (request.gitPassword != null) {
-                body.put("RepositoryPassword", request.gitPassword);
+                body.put(JSON_REPOSITORY_PASSWORD, request.gitPassword);
             }
         }
         // Never send TLSSkipVerify
@@ -344,17 +379,17 @@ final class PortainerClient implements AutoCloseable {
             String apiKey,
             int endpointId,
             KubernetesFromStringRequest request) throws IOException {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         String url = base + "/api/stacks/create/kubernetes/string?endpointId=" + endpointId;
         ObjectNode body = MAPPER.createObjectNode();
         // Portainer K8s Validate() does not require StackName (only StackFileContent).
         if (request.stackName != null && !request.stackName.isBlank()) {
-            body.put("StackName", request.stackName.trim());
+            body.put(JSON_STACK_NAME, request.stackName.trim());
         }
-        body.put("StackFileContent", request.stackFileContent == null ? "" : request.stackFileContent);
+        body.put(JSON_STACK_FILE_CONTENT, request.stackFileContent == null ? "" : request.stackFileContent);
         if (request.namespace != null && !request.namespace.isBlank()) {
-            body.put("Namespace", request.namespace.trim());
+            body.put(JSON_NAMESPACE, request.namespace.trim());
         }
         return httpJson("POST", url, apiKey, body, null);
     }
@@ -368,28 +403,28 @@ final class PortainerClient implements AutoCloseable {
             String apiKey,
             int endpointId,
             KubernetesFromGitRequest request) throws IOException {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         String url = base + "/api/stacks/create/kubernetes/repository?endpointId=" + endpointId;
         ObjectNode body = MAPPER.createObjectNode();
         if (request.stackName != null && !request.stackName.isBlank()) {
-            body.put("StackName", request.stackName.trim());
+            body.put(JSON_STACK_NAME, request.stackName.trim());
         }
         body.put("RepositoryURL", request.repositoryUrl);
         body.put("ManifestFile", request.manifestFile == null ? "" : request.manifestFile.trim());
         if (request.namespace != null && !request.namespace.isBlank()) {
-            body.put("Namespace", request.namespace.trim());
+            body.put(JSON_NAMESPACE, request.namespace.trim());
         }
         if (request.repositoryReferenceName != null && !request.repositoryReferenceName.isBlank()) {
-            body.put("RepositoryReferenceName", request.repositoryReferenceName.trim());
+            body.put(JSON_REPOSITORY_REFERENCE_NAME, request.repositoryReferenceName.trim());
         }
         if (request.gitUsername != null || request.gitPassword != null) {
-            body.put("RepositoryAuthentication", true);
+            body.put(JSON_REPOSITORY_AUTHENTICATION, true);
             if (request.gitUsername != null) {
-                body.put("RepositoryUsername", request.gitUsername);
+                body.put(JSON_REPOSITORY_USERNAME, request.gitUsername);
             }
             if (request.gitPassword != null) {
-                body.put("RepositoryPassword", request.gitPassword);
+                body.put(JSON_REPOSITORY_PASSWORD, request.gitPassword);
             }
         }
         // Never send TLSSkipVerify
@@ -406,13 +441,13 @@ final class PortainerClient implements AutoCloseable {
             int stackId,
             int endpointId,
             KubernetesFileUpdateRequest request) throws IOException {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        String url = base + "/api/stacks/" + stackId + "?endpointId=" + endpointId;
+        String url = base + API_STACKS + stackId + QUERY_ENDPOINT_ID + endpointId;
         ObjectNode body = MAPPER.createObjectNode();
-        body.put("StackFileContent", request.stackFileContent == null ? "" : request.stackFileContent);
+        body.put(JSON_STACK_FILE_CONTENT, request.stackFileContent == null ? "" : request.stackFileContent);
         if (request.stackName != null && !request.stackName.isBlank()) {
-            body.put("StackName", request.stackName.trim());
+            body.put(JSON_STACK_NAME, request.stackName.trim());
         }
         try {
             return httpJson("PUT", url, apiKey, body, null);
@@ -432,20 +467,20 @@ final class PortainerClient implements AutoCloseable {
             int stackId,
             int endpointId,
             KubernetesGitUpdateRequest request) throws IOException {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        String url = base + "/api/stacks/" + stackId + "?endpointId=" + endpointId;
+        String url = base + API_STACKS + stackId + QUERY_ENDPOINT_ID + endpointId;
         ObjectNode body = MAPPER.createObjectNode();
         if (request.repositoryReferenceName != null && !request.repositoryReferenceName.isBlank()) {
-            body.put("RepositoryReferenceName", request.repositoryReferenceName.trim());
+            body.put(JSON_REPOSITORY_REFERENCE_NAME, request.repositoryReferenceName.trim());
         }
         if (request.gitUsername != null || request.gitPassword != null) {
-            body.put("RepositoryAuthentication", true);
+            body.put(JSON_REPOSITORY_AUTHENTICATION, true);
             if (request.gitUsername != null) {
-                body.put("RepositoryUsername", request.gitUsername);
+                body.put(JSON_REPOSITORY_USERNAME, request.gitUsername);
             }
             if (request.gitPassword != null) {
-                body.put("RepositoryPassword", request.gitPassword);
+                body.put(JSON_REPOSITORY_PASSWORD, request.gitPassword);
             }
         }
         // Never send TLSSkipVerify
@@ -460,7 +495,7 @@ final class PortainerClient implements AutoCloseable {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         return httpJson(
                 "GET",
-                base + "/api/endpoints/" + endpointId + "/kubernetes/version",
+                base + API_ENDPOINTS + endpointId + "/kubernetes/version",
                 apiKey,
                 null,
                 "kubernetes version");
@@ -510,7 +545,7 @@ final class PortainerClient implements AutoCloseable {
         String msg = e.getMessage() == null ? "" : e.getMessage();
         String lower = msg.toLowerCase(Locale.ROOT);
         if (isHttpStatus(e, 403)
-                || lower.contains("lacks permission")
+                || lower.contains(LACKS_PERMISSION)
                 || lower.contains("forbidden")
                 || lower.contains("permission denied")) {
             return new IOException(
@@ -533,7 +568,7 @@ final class PortainerClient implements AutoCloseable {
         if (msg == null || msg.isBlank()) {
             return false;
         }
-        String needle = "HTTP " + code;
+        String needle = HTTP_STATUS_PREFIX + code;
         return msg.startsWith(needle) || msg.contains(needle + " ") || msg.contains(needle + " -");
     }
 
@@ -544,7 +579,7 @@ final class PortainerClient implements AutoCloseable {
             throws IOException {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         StringBuilder url = new StringBuilder(base)
-                .append("/api/endpoints/")
+                .append(API_ENDPOINTS)
                 .append(endpointId)
                 .append("/kubernetes/helm");
         if (namespace != null && !namespace.isBlank()) {
@@ -574,7 +609,7 @@ final class PortainerClient implements AutoCloseable {
             if (ns.isBlank()) {
                 return true;
             }
-            String releaseNs = firstNonBlank(text(r, "Namespace"), text(r, "namespace"));
+            String releaseNs = firstNonBlank(text(r, JSON_NAMESPACE), text(r, "namespace"));
             if (ns.equals(releaseNs) || releaseNs.isBlank()) {
                 return true;
             }
@@ -590,9 +625,9 @@ final class PortainerClient implements AutoCloseable {
      */
     JsonNode installHelmChart(
             String baseUrl, String apiKey, int endpointId, HelmInstallRequest request) throws IOException {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        String url = base + "/api/endpoints/" + endpointId + "/kubernetes/helm";
+        String url = base + API_ENDPOINTS + endpointId + "/kubernetes/helm";
         ObjectNode body = MAPPER.createObjectNode();
         body.put("name", request.releaseName);
         body.put("chart", request.chart);
@@ -625,14 +660,14 @@ final class PortainerClient implements AutoCloseable {
         String encoded = java.net.URLEncoder.encode(releaseName.trim(), StandardCharsets.UTF_8)
                 .replace("+", "%20");
         StringBuilder url = new StringBuilder(base)
-                .append("/api/endpoints/")
+                .append(API_ENDPOINTS)
                 .append(endpointId)
                 .append("/kubernetes/helm/")
                 .append(encoded);
         if (namespace != null && !namespace.isBlank()) {
             url.append("?namespace=").append(java.net.URLEncoder.encode(namespace.trim(), StandardCharsets.UTF_8));
         }
-        return httpJson("DELETE", url.toString(), apiKey, null, "uninstall helm");
+        return httpJson(HTTP_DELETE, url.toString(), apiKey, null, "uninstall helm");
     }
 
     /**
@@ -643,7 +678,7 @@ final class PortainerClient implements AutoCloseable {
             throws IOException {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         JsonNode configs = httpJson(
-                "GET", base + "/api/endpoints/" + endpointId + "/docker/configs", apiKey, null, "list configs");
+                "GET", base + API_ENDPOINTS + endpointId + "/docker/configs", apiKey, null, "list configs");
         if (!configs.isArray()) {
             throw new IOException("Portainer GET /docker/configs did not return an array");
         }
@@ -664,7 +699,7 @@ final class PortainerClient implements AutoCloseable {
     JsonNode createDockerConfig(
             String baseUrl, String apiKey, int endpointId, DockerConfigCreateRequest request)
             throws IOException {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         if (request.name == null || request.name.isBlank()) {
             throw new IOException("Docker config name is required.");
         }
@@ -679,12 +714,12 @@ final class PortainerClient implements AutoCloseable {
                     labels.put(e.getKey(), e.getValue() == null ? "" : e.getValue());
                 }
             }
-            body.set("Labels", labels);
+            body.set(JSON_LABELS, labels);
         }
         try {
             return httpJson(
                     "POST",
-                    base + "/api/endpoints/" + endpointId + "/docker/configs/create",
+                    base + API_ENDPOINTS + endpointId + "/docker/configs/create",
                     apiKey,
                     body,
                     "create config");
@@ -704,8 +739,8 @@ final class PortainerClient implements AutoCloseable {
         }
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         httpJson(
-                "DELETE",
-                base + "/api/endpoints/" + endpointId + "/docker/configs/" + configId.trim(),
+                HTTP_DELETE,
+                base + API_ENDPOINTS + endpointId + "/docker/configs/" + configId.trim(),
                 apiKey,
                 null,
                 "remove config");
@@ -719,7 +754,7 @@ final class PortainerClient implements AutoCloseable {
             throws IOException {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         JsonNode secrets = httpJson(
-                "GET", base + "/api/endpoints/" + endpointId + "/docker/secrets", apiKey, null, "list secrets");
+                "GET", base + API_ENDPOINTS + endpointId + "/docker/secrets", apiKey, null, "list secrets");
         if (!secrets.isArray()) {
             throw new IOException("Portainer GET /docker/secrets did not return an array");
         }
@@ -740,7 +775,7 @@ final class PortainerClient implements AutoCloseable {
     JsonNode createDockerSecret(
             String baseUrl, String apiKey, int endpointId, DockerSecretCreateRequest request)
             throws IOException {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         if (request.name == null || request.name.isBlank()) {
             throw new IOException("Docker secret name is required.");
         }
@@ -755,12 +790,12 @@ final class PortainerClient implements AutoCloseable {
                     labels.put(e.getKey(), e.getValue() == null ? "" : e.getValue());
                 }
             }
-            body.set("Labels", labels);
+            body.set(JSON_LABELS, labels);
         }
         try {
             return httpJson(
                     "POST",
-                    base + "/api/endpoints/" + endpointId + "/docker/secrets/create",
+                    base + API_ENDPOINTS + endpointId + "/docker/secrets/create",
                     apiKey,
                     body,
                     "create secret");
@@ -780,8 +815,8 @@ final class PortainerClient implements AutoCloseable {
         }
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         httpJson(
-                "DELETE",
-                base + "/api/endpoints/" + endpointId + "/docker/secrets/" + secretId.trim(),
+                HTTP_DELETE,
+                base + API_ENDPOINTS + endpointId + "/docker/secrets/" + secretId.trim(),
                 apiKey,
                 null,
                 "remove secret");
@@ -800,7 +835,7 @@ final class PortainerClient implements AutoCloseable {
         if (name.isBlank()) {
             return null;
         }
-        Map<String, String> labels = parseDockerConfigLabels(spec.path("Labels"));
+        Map<String, String> labels = parseDockerConfigLabels(spec.path(JSON_LABELS));
         return new DockerConfigSummary(id, name, labels);
     }
 
@@ -847,11 +882,11 @@ final class PortainerClient implements AutoCloseable {
             int stackId,
             int endpointId,
             StackFileUpdateRequest request) throws IOException {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        String url = base + "/api/stacks/" + stackId + "?endpointId=" + endpointId;
+        String url = base + API_STACKS + stackId + QUERY_ENDPOINT_ID + endpointId;
         ObjectNode body = MAPPER.createObjectNode();
-        body.put("StackFileContent", request.stackFileContent == null ? "" : request.stackFileContent);
+        body.put(JSON_STACK_FILE_CONTENT, request.stackFileContent == null ? "" : request.stackFileContent);
         if (request.env != null && !request.env.isEmpty()) {
             body.set("Env", toEnvArray(request.env));
         }
@@ -888,10 +923,10 @@ final class PortainerClient implements AutoCloseable {
     }
 
     private ObjectNode stackFromStringBody(StackFromStringRequest request, String swarmId) {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         ObjectNode body = MAPPER.createObjectNode();
         body.put("Name", request.name);
-        body.put("StackFileContent", request.stackFileContent == null ? "" : request.stackFileContent);
+        body.put(JSON_STACK_FILE_CONTENT, request.stackFileContent == null ? "" : request.stackFileContent);
         if (request.env != null && !request.env.isEmpty()) {
             body.set("Env", toEnvArray(request.env));
         }
@@ -902,7 +937,7 @@ final class PortainerClient implements AutoCloseable {
     }
 
     private ObjectNode stackFromGitBody(StackFromGitRequest request, String swarmId) {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, MSG_REQUEST);
         ObjectNode body = MAPPER.createObjectNode();
         body.put("Name", request.name);
         body.put("RepositoryURL", request.repositoryUrl);
@@ -910,18 +945,18 @@ final class PortainerClient implements AutoCloseable {
             body.put("ComposeFile", request.composeFile.trim());
         }
         if (request.repositoryReferenceName != null && !request.repositoryReferenceName.isBlank()) {
-            body.put("RepositoryReferenceName", request.repositoryReferenceName.trim());
+            body.put(JSON_REPOSITORY_REFERENCE_NAME, request.repositoryReferenceName.trim());
         }
         if (request.env != null && !request.env.isEmpty()) {
             body.set("Env", toEnvArray(request.env));
         }
         if (request.gitUsername != null || request.gitPassword != null) {
-            body.put("RepositoryAuthentication", true);
+            body.put(JSON_REPOSITORY_AUTHENTICATION, true);
             if (request.gitUsername != null) {
-                body.put("RepositoryUsername", request.gitUsername);
+                body.put(JSON_REPOSITORY_USERNAME, request.gitUsername);
             }
             if (request.gitPassword != null) {
-                body.put("RepositoryPassword", request.gitPassword);
+                body.put(JSON_REPOSITORY_PASSWORD, request.gitPassword);
             }
         }
         if (swarmId != null && !swarmId.isBlank()) {
@@ -966,7 +1001,7 @@ final class PortainerClient implements AutoCloseable {
                 .header("Accept", "application/json");
 
         String m = method == null ? "GET" : method.toUpperCase(Locale.ROOT);
-        if ("GET".equals(m) || "DELETE".equals(m)) {
+        if ("GET".equals(m) || HTTP_DELETE.equals(m)) {
             req.method(m, HttpRequest.BodyPublishers.noBody());
         } else {
             req.header("Content-Type", "application/json");
@@ -1000,7 +1035,7 @@ final class PortainerClient implements AutoCloseable {
             if (buildLog != null) {
                 buildLog.http(m, path, durationMs, debugNote);
                 if (buildLog.isVerbose()) {
-                    buildLog.debug("HTTP " + code + " raw response body: " + rawErrorBodyForDebug(bytes));
+                    buildLog.debug(HTTP_STATUS_PREFIX + code + " raw response body: " + rawErrorBodyForDebug(bytes));
                 }
             }
             throw httpError(code, bytes, uri);
@@ -1043,7 +1078,7 @@ final class PortainerClient implements AutoCloseable {
     static IOException httpError(int code, byte[] bodyBytes, URI uri) {
         if (looksLikeHtml(bodyBytes)) {
             return new IOException(
-                    "HTTP "
+                    HTTP_STATUS_PREFIX
                             + code
                             + " - response looks like HTML (Portainer UI page?), not the API."
                             + " Use the API base URL (typically http://host:9000 or https://host:9443),"
@@ -1054,21 +1089,21 @@ final class PortainerClient implements AutoCloseable {
 
         if (isConnectivityMessage(detail)) {
             return new IOException(
-                    "HTTP " + code + " - cannot connect to Portainer host/port (network/connectivity)"
+                    HTTP_STATUS_PREFIX + code + " - cannot connect to Portainer host/port (network/connectivity)"
                             + suffix
                             + portHintSuffix(uri, detail));
         }
         if (isImagePullFailure(detail)) {
-            return new IOException("HTTP " + code + " - image pull failed" + suffix);
+            return new IOException(HTTP_STATUS_PREFIX + code + " - image pull failed" + suffix);
         }
         if (isHelmChartRepositoryFailure(detail)) {
             return new IOException(
-                    "HTTP " + code + " - " + formatHelmChartRepositoryFailure(detail)
+                    HTTP_STATUS_PREFIX + code + " - " + formatHelmChartRepositoryFailure(detail)
                             + helmChartRepositoryHint(detail));
         }
         if (isKubernetesConnectivityFailure(detail)) {
             return new IOException(
-                    "HTTP " + code + " - Kubernetes cluster unreachable from Portainer" + suffix
+                    HTTP_STATUS_PREFIX + code + " - Kubernetes cluster unreachable from Portainer" + suffix
                             + kubernetesConnectivityHint(detail));
         }
         if (code == 401) {
@@ -1085,7 +1120,7 @@ final class PortainerClient implements AutoCloseable {
         if (code == 409) {
             return new IOException("HTTP 409 - Portainer stack conflict (name may already exist)" + suffix);
         }
-        return new IOException("HTTP " + code + suffix);
+        return new IOException(HTTP_STATUS_PREFIX + code + suffix);
     }
 
     /** Package-visible for tests. */
@@ -1393,7 +1428,7 @@ final class PortainerClient implements AutoCloseable {
         String d = msg.toLowerCase(Locale.ROOT);
         return d.contains("401")
                 || d.contains("invalid or missing portainer api key")
-                || (d.contains("403") && d.contains("lacks permission"));
+                || (d.contains("403") && d.contains(LACKS_PERMISSION));
     }
 
     private static String detailSuffix(String fullMessage) {

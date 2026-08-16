@@ -523,7 +523,7 @@ public class PortainerHelmBuilderTest {
                 return;
             }
             if (path != null && path.matches("/api/endpoints/\\d+/kubernetes/helm$")
-                    && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 respond(
                         exchange,
                         500,
