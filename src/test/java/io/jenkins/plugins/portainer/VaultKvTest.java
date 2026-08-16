@@ -14,6 +14,8 @@ import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -22,6 +24,7 @@ import java.util.logging.Logger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 @WithJenkins
 class VaultKvTest {
@@ -201,6 +204,79 @@ class VaultKvTest {
                 0,
                 quietLog())));
         assertTrue(ex.getMessage() != null && !ex.getMessage().isBlank());
+    }
+
+    @Test
+    void remapInheritAbort_requiredNotFound_rewritesMessage() throws Exception {
+        Method m = VaultKv.class.getDeclaredMethod(
+                "remapInheritAbort", VaultKv.Request.class, String.class, AbortException.class);
+        m.setAccessible(true);
+        VaultKv.Request req = request(
+                VaultKv.Policy.REQUIRED,
+                ConnectionMode.INHERIT,
+                VaultFields.parse("apps/demo", "secret", null, null, null, null),
+                null,
+                0,
+                0,
+                quietLog());
+        try {
+            m.invoke(null, req, "apps/demo", new AbortException("secret not found or error at path"));
+            fail("expected AbortException");
+        } catch (InvocationTargetException e) {
+            assertTrue(e.getCause() instanceof AbortException);
+            assertTrue(e.getCause().getMessage().contains("Vault path not found: apps/demo"));
+        }
+    }
+
+    @Test
+    void remapInheritAbort_optionalPolicy_keepsOriginal() throws Exception {
+        Method m = VaultKv.class.getDeclaredMethod(
+                "remapInheritAbort", VaultKv.Request.class, String.class, AbortException.class);
+        m.setAccessible(true);
+        VaultKv.Request req = request(
+                VaultKv.Policy.OPTIONAL_SOFT_SKIP,
+                ConnectionMode.INHERIT,
+                VaultFields.parse("apps/demo", "secret", null, null, null, null),
+                null,
+                0,
+                0,
+                quietLog());
+        try {
+            m.invoke(null, req, "apps/demo", new AbortException("error at path 'x'"));
+            fail("expected AbortException");
+        } catch (InvocationTargetException e) {
+            assertTrue(e.getCause() instanceof AbortException);
+            assertTrue(e.getCause().getMessage().contains("error at path"));
+        }
+    }
+
+    @Test
+    void manual_usesGlobalTimeoutDefaultsWhenZero(JenkinsRule jenkins) throws Exception {
+        System.setProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP, "true");
+        startVaultMock(200, "{\"data\":{\"data\":{\"T\":\"1\"},\"metadata\":{\"version\":1}}}");
+
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new UsernamePasswordCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "vault-kv-timeouts",
+                        "AppRole",
+                        "role-abc",
+                        "secret-xyz"));
+        SystemCredentialsProvider.getInstance().save();
+
+        String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+        VaultFields fields = VaultFields.parse(
+                "myapp/prod", "secret", null, null, baseUrl, null);
+
+        Map<String, String> data = VaultKv.resolve(request(
+                VaultKv.Policy.REQUIRED,
+                ConnectionMode.MANUAL,
+                fields,
+                "vault-kv-timeouts",
+                0,
+                0,
+                quietLog()));
+        assertEquals(Map.of("T", "1"), data);
     }
 
     @Test

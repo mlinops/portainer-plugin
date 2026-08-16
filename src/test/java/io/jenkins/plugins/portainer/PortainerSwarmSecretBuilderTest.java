@@ -29,6 +29,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @WithJenkins
@@ -251,6 +253,23 @@ public class PortainerSwarmSecretBuilderTest {
                 "Portainer Stack Secret",
                 jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class)
                         .getDisplayName());
+    }
+
+    @Test
+    public void descriptor_newInstance_nullFormData_skipsFlatten(JenkinsRule jenkins) {
+        PortainerSwarmSecretBuilder.DescriptorImpl d =
+                jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class);
+        // false branch of formData != null (skip flatten) then super bind fails
+        assertThrows(Throwable.class, () -> d.newInstance((org.kohsuke.stapler.StaplerRequest2) null, null));
+    }
+
+    @Test
+    public void descriptor_vaultInheritHelpers(JenkinsRule jenkins) {
+        PortainerSwarmSecretBuilder.DescriptorImpl d =
+                jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class);
+        assertFalse(d.isVaultPluginPresent());
+        assertFalse(d.isVaultInheritReady());
+        assertEquals("Vault Plugin is not installed.", d.getVaultInheritSummary());
     }
 
     private static void stubVault() {

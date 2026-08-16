@@ -36,9 +36,17 @@ public class GitRepositoryFilesTest {
 
     @AfterEach
     public void clearOverrides() {
-        GitRepositoryFiles.testOverride = null;
-        GitRepositoryFiles.listTestOverride = null;
+        GitRepositoryFiles.testOverride.set(null);
+        GitRepositoryFiles.listTestOverride.set(null);
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
+    }
+
+    private static GitRepositoryFiles.CloneContext cloneCtx(
+            PortainerCredentials.GitAuth auth,
+            FilePath workspace,
+            Launcher launcher,
+            TaskListener listener) {
+        return new GitRepositoryFiles.CloneContext(auth, workspace, launcher, listener);
     }
 
     /** Fake {@code git} via {@link Launcher}: no real process, optional checkout seeding. */
@@ -75,6 +83,7 @@ public class GitRepositoryFilesTest {
             return new Proc() {
                 @Override
                 public void kill() {
+                    throw new UnsupportedOperationException("not used in stub");
                 }
 
                 @Override
@@ -270,19 +279,16 @@ public class GitRepositoryFilesTest {
     @Test
     public void listConfigFiles_defaultReferencePassedToOverride() throws Exception {
         AtomicReference<String> seenRef = new AtomicReference<>();
-        GitRepositoryFiles.listTestOverride = req -> {
+        GitRepositoryFiles.listTestOverride.set(req -> {
             seenRef.set(req.reference);
             return List.of();
-        };
+        });
         GitRepositoryFiles.listConfigFiles(
                 "http://127.0.0.1/configs.git",
                 "  ",
                 "configs",
                 "**/*",
-                null,
-                null,
-                null,
-                null);
+                cloneCtx(null, null, null, null));
         assertEquals(PortainerStackBuilder.DEFAULT_REPOSITORY_REFERENCE, seenRef.get());
     }
 
@@ -388,34 +394,28 @@ public class GitRepositoryFilesTest {
 
     @Test
     public void readFile_rejectsBlockedHost_withoutOverride() {
-        GitRepositoryFiles.testOverride = null;
+        GitRepositoryFiles.testOverride.set(null);
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.readFile(
                         "http://169.254.169.254/repo.git",
                         "main",
                         "values.yaml",
-                        null,
-                        null,
-                        null,
-                        null));
+                        cloneCtx(null, null, null, null)));
         String msg = ex.getMessage().toLowerCase();
         assertTrue(msg.contains("not allowed") || msg.contains("resolv"), msg);
     }
 
     @Test
     public void readFile_rejectsUnresolvableHost_withoutOverride() {
-        GitRepositoryFiles.testOverride = null;
+        GitRepositoryFiles.testOverride.set(null);
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.readFile(
                         "https://gitlab.example/group/values.git",
                         "main",
                         "values.yaml",
-                        null,
-                        null,
-                        null,
-                        null));
+                        cloneCtx(null, null, null, null)));
         String msg = ex.getMessage().toLowerCase();
         assertTrue(msg.contains("resolv") || msg.contains("not allowed"), msg);
     }
@@ -423,26 +423,23 @@ public class GitRepositoryFilesTest {
     @Test
     public void readFile_testOverride_bypassesHostCheck() throws Exception {
         AtomicBoolean called = new AtomicBoolean(false);
-        GitRepositoryFiles.testOverride = req -> {
+        GitRepositoryFiles.testOverride.set(req -> {
             called.set(true);
             assertEquals("http://169.254.169.254/repo.git", req.repositoryUrl);
             return "values: {}\n";
-        };
+        });
         String content = GitRepositoryFiles.readFile(
                 "http://169.254.169.254/repo.git",
                 "main",
                 "values.yaml",
-                null,
-                null,
-                null,
-                null);
+                cloneCtx(null, null, null, null));
         assertEquals("values: {}\n", content);
         assertTrue(called.get());
     }
 
     @Test
     public void listConfigFiles_rejectsBlockedHost_withoutOverride() {
-        GitRepositoryFiles.listTestOverride = null;
+        GitRepositoryFiles.listTestOverride.set(null);
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.listConfigFiles(
@@ -450,17 +447,14 @@ public class GitRepositoryFilesTest {
                         "main",
                         "configs",
                         "**/*",
-                        null,
-                        null,
-                        null,
-                        null));
+                        cloneCtx(null, null, null, null)));
         String msg = ex.getMessage().toLowerCase();
         assertTrue(msg.contains("not allowed") || msg.contains("resolv"), msg);
     }
 
     @Test
     public void listConfigFiles_rejectsUnresolvableHost_withoutOverride() {
-        GitRepositoryFiles.listTestOverride = null;
+        GitRepositoryFiles.listTestOverride.set(null);
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.listConfigFiles(
@@ -468,10 +462,7 @@ public class GitRepositoryFilesTest {
                         "main",
                         "configs",
                         "**/*",
-                        null,
-                        null,
-                        null,
-                        null));
+                        cloneCtx(null, null, null, null)));
         String msg = ex.getMessage().toLowerCase();
         assertTrue(msg.contains("resolv") || msg.contains("not allowed"), msg);
     }
@@ -479,20 +470,17 @@ public class GitRepositoryFilesTest {
     @Test
     public void listConfigFiles_listTestOverride_bypassesHostCheck() throws Exception {
         AtomicBoolean called = new AtomicBoolean(false);
-        GitRepositoryFiles.listTestOverride = req -> {
+        GitRepositoryFiles.listTestOverride.set(req -> {
             called.set(true);
             assertEquals("http://169.254.169.254/configs.git", req.repositoryUrl);
             return List.of(new SwarmConfigFile("app.json", "{}".getBytes()));
-        };
+        });
         List<SwarmConfigFile> files = GitRepositoryFiles.listConfigFiles(
                 "http://169.254.169.254/configs.git",
                 "main",
                 "configs",
                 "**/*",
-                null,
-                null,
-                null,
-                null);
+                cloneCtx(null, null, null, null));
         assertEquals(1, files.size());
         assertEquals("app.json", files.get(0).relativePath);
         assertTrue(called.get());
@@ -509,10 +497,7 @@ public class GitRepositoryFilesTest {
                 LOOPBACK_REPO,
                 "refs/heads/main",
                 "values.yaml",
-                null,
-                workspace,
-                launcher,
-                TaskListener.NULL);
+                cloneCtx(null, workspace, launcher, TaskListener.NULL));
         assertEquals("replicaCount: 2\n", content);
     }
 
@@ -529,10 +514,7 @@ public class GitRepositoryFilesTest {
                         LOOPBACK_REPO,
                         "main",
                         "missing.yaml",
-                        null,
-                        workspace,
-                        launcher,
-                        TaskListener.NULL));
+                        cloneCtx(null, workspace, launcher, TaskListener.NULL)));
         assertTrue(ex.getMessage().contains("Values file not found"));
     }
 
@@ -551,10 +533,7 @@ public class GitRepositoryFilesTest {
                         LOOPBACK_REPO,
                         "main",
                         "values.yaml",
-                        null,
-                        workspace,
-                        launcher,
-                        TaskListener.NULL));
+                        cloneCtx(null, workspace, launcher, TaskListener.NULL)));
         assertTrue(ex.getMessage().contains("directory"));
     }
 
@@ -574,10 +553,7 @@ public class GitRepositoryFilesTest {
                         LOOPBACK_REPO,
                         "main",
                         "values.yaml",
-                        auth,
-                        workspace,
-                        launcher,
-                        TaskListener.NULL));
+                        cloneCtx(auth, workspace, launcher, TaskListener.NULL)));
         assertTrue(ex.getMessage().contains("git exit 128"));
         assertTrue(ex.getMessage().contains("Detail:"));
         assertTrue(ex.getMessage().contains("…"));
@@ -596,10 +572,7 @@ public class GitRepositoryFilesTest {
                         LOOPBACK_REPO,
                         "main",
                         "values.yaml",
-                        null,
-                        workspace,
-                        launcher,
-                        TaskListener.NULL));
+                        cloneCtx(null, workspace, launcher, TaskListener.NULL)));
         assertTrue(ex.getMessage().contains("git exit 1"));
         assertFalse(ex.getMessage().contains("Detail:"));
     }
@@ -620,10 +593,7 @@ public class GitRepositoryFilesTest {
                 "main",
                 "configs",
                 "*.json",
-                null,
-                workspace,
-                launcher,
-                TaskListener.NULL);
+                cloneCtx(null, workspace, launcher, TaskListener.NULL));
         assertEquals(2, files.size());
         assertEquals("a.json", files.get(0).relativePath);
         assertEquals("b.json", files.get(1).relativePath);
@@ -642,10 +612,7 @@ public class GitRepositoryFilesTest {
                         "main",
                         "configs",
                         "**/*",
-                        null,
-                        workspace,
-                        launcher,
-                        TaskListener.NULL));
+                        cloneCtx(null, workspace, launcher, TaskListener.NULL)));
         assertTrue(ex.getMessage().contains("config repository"));
         assertTrue(ex.getMessage().contains("Detail: permission denied"));
     }

@@ -176,38 +176,63 @@ final class SwarmNamedResource {
             List<PortainerClient.DockerConfigSummary> listed,
             List<Ensured> ensured,
             PortainerBuildLogger log) {
+        Map<String, String> currentByBase = indexEnsuredByBasename(ensured);
+        List<String> pruned = new ArrayList<>();
+        for (PortainerClient.DockerConfigSummary summary : listed) {
+            if (!isStaleRelativeToCurrent(summary, kind.labelBase, currentByBase)) {
+                continue;
+            }
+            removeOneSoftFail(kind, remover, summary, pruned, log);
+        }
+        if (!pruned.isEmpty()) {
+            log.info("Pruned: " + String.join(", ", pruned));
+        }
+    }
+
+    private static Map<String, String> indexEnsuredByBasename(List<Ensured> ensured) {
         Map<String, String> currentByBase = new LinkedHashMap<>();
         for (Ensured item : ensured) {
             currentByBase.put(item.basename, item.name);
         }
-        List<String> pruned = new ArrayList<>();
-        for (PortainerClient.DockerConfigSummary summary : listed) {
-            String baseLabel = summary.labels.get(kind.labelBase);
-            if (baseLabel == null || baseLabel.isBlank()) {
-                continue;
-            }
-            String keepName = currentByBase.get(baseLabel);
-            if (keepName == null || keepName.equals(summary.name)) {
-                continue;
-            }
-            if (summary.id == null || summary.id.isBlank()) {
-                log.warn("Prune skipped " + summary.name + " (missing " + kind.noun + " ID)");
-                continue;
-            }
-            try {
-                remover.remove(summary.id);
-                pruned.add(summary.name);
-            } catch (IOException e) {
-                String msg = PortainerConnections.truncateMessage(e);
-                if (msg.contains("400") || msg.toLowerCase(Locale.ROOT).contains("in use")) {
-                    log.warn("Prune skipped " + summary.name + " (still referenced)");
-                } else {
-                    log.warn("Prune failed " + summary.name + ": " + msg);
-                }
-            }
+        return currentByBase;
+    }
+
+    private static boolean isStaleRelativeToCurrent(
+            PortainerClient.DockerConfigSummary summary,
+            String labelBase,
+            Map<String, String> currentByBase) {
+        String baseLabel = summary.labels.get(labelBase);
+        if (baseLabel == null || baseLabel.isBlank()) {
+            return false;
         }
-        if (!pruned.isEmpty()) {
-            log.info("Pruned: " + String.join(", ", pruned));
+        String keepName = currentByBase.get(baseLabel);
+        return keepName != null && !keepName.equals(summary.name);
+    }
+
+    private static void removeOneSoftFail(
+            Kind kind,
+            Remover remover,
+            PortainerClient.DockerConfigSummary summary,
+            List<String> pruned,
+            PortainerBuildLogger log) {
+        if (summary.id == null || summary.id.isBlank()) {
+            log.warn("Prune skipped " + summary.name + " (missing " + kind.noun + " ID)");
+            return;
+        }
+        try {
+            remover.remove(summary.id);
+            pruned.add(summary.name);
+        } catch (IOException e) {
+            logPruneSoftFail(summary.name, e, log);
+        }
+    }
+
+    private static void logPruneSoftFail(String name, IOException e, PortainerBuildLogger log) {
+        String msg = PortainerConnections.truncateMessage(e);
+        if (msg.contains("400") || msg.toLowerCase(Locale.ROOT).contains("in use")) {
+            log.warn("Prune skipped " + name + " (still referenced)");
+        } else {
+            log.warn("Prune failed " + name + ": " + msg);
         }
     }
 }

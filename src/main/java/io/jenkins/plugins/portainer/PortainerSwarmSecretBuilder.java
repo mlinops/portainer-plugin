@@ -255,10 +255,7 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
                 log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
         final List<String> keys = PortainerConnections.abortOn(
                 log, () -> SwarmConfigNaming.parseSecretKeys(secretKeys));
-
-        if (ConnectionMode.isNone(getVaultConnectionMode())) {
-            throw PortainerConnections.abort(log, "Vault connection is required for Swarm secrets.");
-        }
+        requireVaultConnection(log);
 
         PortainerGlobalConfiguration cfg = PortainerGlobalConfiguration.get();
         final PortainerConnections.Authenticated auth = PortainerConnections.resolveAuthenticated(
@@ -282,94 +279,22 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
         try (PortainerClient client = new PortainerClient(
                 connection.connectTimeoutMs, connection.readTimeoutMs, log)) {
             PortainerConnections.runPreflight(client, connection, apiKey, endpoint, false, log);
-
-            try {
-                client.resolveSwarmId(connection.baseUrl, apiKey, endpoint);
-            } catch (IOException e) {
-                throw PortainerConnections.abort(
-                        log,
-                        "Swarm preflight failed for endpoint " + endpoint + ": "
-                                + PortainerConnections.truncateMessage(e),
-                        e);
-            }
-
-            log.debug(PortainerBuildLogger.formatVaultConnection(
-                    getVaultConnectionMode(),
-                    vaultFields.pathRaw,
-                    vaultFields.mount,
-                    vaultFields.version));
-            VaultConnections.runPreflight(new VaultConnections.Request(
-                    getVaultConnectionMode(),
-                    true,
-                    vaultUrl,
-                    vaultAppRoleCredentialsId,
-                    vaultPath,
-                    vaultNamespace,
-                    run,
-                    buildEnv,
-                    item,
-                    connection.connectTimeoutMs,
-                    connection.readTimeoutMs,
-                    log));
+            resolveSwarmOrAbort(client, connection, apiKey, endpoint, log);
+            runVaultPreflight(run, buildEnv, item, connection, vaultFields, log);
 
             Map<String, String> vaultData = resolveVault(run, buildEnv, item, connection, vaultFields, log);
-            if (vaultData.isEmpty()) {
-                throw PortainerConnections.abort(
-                        log,
-                        "Vault path is empty: "
-                                + (vaultFields.pathRaw == null ? "" : vaultFields.pathRaw));
-            }
+            requireNonEmptyVault(vaultData, vaultFields, log);
+            assertVaultKeysMatch(keys, vaultData, vaultFields, log);
 
-            log.info(PortainerBuildLogger.formatVaultPath(vaultFields.pathRaw, vaultFields.version));
-            log.info("Keys configured in step - " + keys.size());
-            log.info("Keys found in Vault - " + vaultData.size());
-
-            Set<String> stepSet = new LinkedHashSet<>(keys);
-            Set<String> vaultSet = new LinkedHashSet<>(vaultData.keySet());
-            Set<String> missing = new LinkedHashSet<>(stepSet);
-            missing.removeAll(vaultSet);
-            Set<String> extra = new LinkedHashSet<>(vaultSet);
-            extra.removeAll(stepSet);
-            log.debug("Keys configured in step: " + PortainerBuildLogger.formatNameList(keys));
-            log.debug("Keys found in Vault: " + PortainerBuildLogger.formatNameList(vaultSet));
-            if (!missing.isEmpty() || !extra.isEmpty()) {
-                log.error(PortainerBuildLogger.formatKeysDiffer(missing.size(), extra.size()));
-                if (!missing.isEmpty()) {
-                    log.debug("Missing: " + PortainerBuildLogger.formatNameList(missing));
-                }
-                if (!extra.isEmpty()) {
-                    log.debug("Extra: " + PortainerBuildLogger.formatNameList(extra));
-                }
-                throw PortainerConnections.abort(
-                        log, PortainerBuildLogger.formatKeysDiffer(missing.size(), extra.size()));
-            }
-
-            List<SecretFile> files = new ArrayList<>();
-            for (String vaultKey : keys) {
-                String value = vaultData.get(vaultKey);
-                byte[] content = value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
-                String basename = SwarmConfigNaming.sanitizeBasename(vaultKey);
-                files.add(new SecretFile(basename, content));
-            }
+            List<SecretFile> files = buildSecretFiles(keys, vaultData);
 
             if (validateOnly) {
-                log.info("Validate-only — skipping Docker secret mutations");
-                for (SecretFile file : files) {
-                    String secretName = SwarmConfigNaming.configName(file.basename, file.content);
-                    log.debug("(would create) " + secretName);
-                }
+                logValidatePlan(log, files);
                 summarize(log, startedNs, files.size(), 0, 0);
                 return;
             }
 
-            Map<String, String> envKeys = new LinkedHashMap<>();
-            List<SwarmNamedResource.Desired> desired = new ArrayList<>();
-            for (SecretFile file : files) {
-                String hash = SwarmConfigNaming.hash8(file.content);
-                String secretName = SwarmConfigNaming.configName(file.basename, file.content);
-                envKeys.put(SwarmConfigNaming.envKeyForBasename(file.basename), secretName);
-                desired.add(new SwarmNamedResource.Desired(file.basename, secretName, hash, file.content));
-            }
+            DesiredSecrets desiredSecrets = buildDesiredSecrets(files);
 
             SwarmNamedResource.Outcome outcome = SwarmNamedResource.ensure(
                     SwarmNamedResource.Kind.SECRET,
@@ -379,7 +304,7 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
                             apiKey,
                             endpoint,
                             new PortainerClient.DockerSecretCreateRequest(name, data, labels)),
-                    desired,
+                    desiredSecrets.desired,
                     null,
                     log);
 
@@ -392,11 +317,134 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
                         log);
             }
 
-            if (!envKeys.isEmpty()) {
-                run.addAction(new PortainerSwarmConfigEnvAction(envKeys));
+            if (!desiredSecrets.envKeys.isEmpty()) {
+                run.addAction(new PortainerSwarmConfigEnvAction(desiredSecrets.envKeys));
             }
 
             summarize(log, startedNs, files.size(), outcome.created, outcome.skipped);
+        }
+    }
+
+    private void requireVaultConnection(PortainerBuildLogger log) throws AbortException {
+        if (ConnectionMode.isNone(getVaultConnectionMode())) {
+            throw PortainerConnections.abort(log, "Vault connection is required for Swarm secrets.");
+        }
+    }
+
+    private static void resolveSwarmOrAbort(
+            PortainerClient client,
+            ResolvedConnection connection,
+            String apiKey,
+            int endpoint,
+            PortainerBuildLogger log) throws AbortException {
+        try {
+            client.resolveSwarmId(connection.baseUrl, apiKey, endpoint);
+        } catch (IOException e) {
+            throw PortainerConnections.abort(
+                    log,
+                    "Swarm preflight failed for endpoint " + endpoint + ": "
+                            + PortainerConnections.truncateMessage(e),
+                    e);
+        }
+    }
+
+    private void runVaultPreflight(
+            Run<?, ?> run,
+            EnvVars buildEnv,
+            Item item,
+            ResolvedConnection connection,
+            VaultFields vaultFields,
+            PortainerBuildLogger log) throws AbortException {
+        log.debug(PortainerBuildLogger.formatVaultConnection(
+                getVaultConnectionMode(),
+                vaultFields.pathRaw,
+                vaultFields.mount,
+                vaultFields.version));
+        VaultConnections.runPreflight(new VaultConnections.Request(
+                getVaultConnectionMode(),
+                true,
+                vaultUrl,
+                vaultAppRoleCredentialsId,
+                vaultPath,
+                vaultNamespace,
+                run,
+                buildEnv,
+                item,
+                connection.connectTimeoutMs,
+                connection.readTimeoutMs,
+                log));
+    }
+
+    private static void requireNonEmptyVault(
+            Map<String, String> vaultData,
+            VaultFields vaultFields,
+            PortainerBuildLogger log) throws AbortException {
+        if (vaultData.isEmpty()) {
+            throw PortainerConnections.abort(
+                    log,
+                    "Vault path is empty: "
+                            + (vaultFields.pathRaw == null ? "" : vaultFields.pathRaw));
+        }
+    }
+
+    private static void assertVaultKeysMatch(
+            List<String> keys,
+            Map<String, String> vaultData,
+            VaultFields vaultFields,
+            PortainerBuildLogger log) throws AbortException {
+        Set<String> stepSet = new LinkedHashSet<>(keys);
+        Set<String> vaultSet = new LinkedHashSet<>(vaultData.keySet());
+        Set<String> missing = new LinkedHashSet<>(stepSet);
+        missing.removeAll(vaultSet);
+        Set<String> extra = new LinkedHashSet<>(vaultSet);
+        extra.removeAll(stepSet);
+        log.info(PortainerBuildLogger.formatVaultPath(vaultFields.pathRaw, vaultFields.version));
+        log.info("Keys configured in step - " + keys.size());
+        log.info("Keys found in Vault - " + vaultData.size());
+        log.debug("Keys configured in step: " + PortainerBuildLogger.formatNameList(keys));
+        log.debug("Keys found in Vault: " + PortainerBuildLogger.formatNameList(vaultSet));
+        if (missing.isEmpty() && extra.isEmpty()) {
+            return;
+        }
+        log.error(PortainerBuildLogger.formatKeysDiffer(missing.size(), extra.size()));
+        if (!missing.isEmpty()) {
+            log.debug("Missing: " + PortainerBuildLogger.formatNameList(missing));
+        }
+        if (!extra.isEmpty()) {
+            log.debug("Extra: " + PortainerBuildLogger.formatNameList(extra));
+        }
+        throw PortainerConnections.abort(
+                log, PortainerBuildLogger.formatKeysDiffer(missing.size(), extra.size()));
+    }
+
+    private static List<SecretFile> buildSecretFiles(List<String> keys, Map<String, String> vaultData) {
+        List<SecretFile> files = new ArrayList<>();
+        for (String vaultKey : keys) {
+            String value = vaultData.get(vaultKey);
+            byte[] content = value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
+            String basename = SwarmConfigNaming.sanitizeBasename(vaultKey);
+            files.add(new SecretFile(basename, content));
+        }
+        return files;
+    }
+
+    private static DesiredSecrets buildDesiredSecrets(List<SecretFile> files) {
+        Map<String, String> envKeys = new LinkedHashMap<>();
+        List<SwarmNamedResource.Desired> desired = new ArrayList<>();
+        for (SecretFile file : files) {
+            String hash = SwarmConfigNaming.hash8(file.content);
+            String secretName = SwarmConfigNaming.configName(file.basename, file.content);
+            envKeys.put(SwarmConfigNaming.envKeyForBasename(file.basename), secretName);
+            desired.add(new SwarmNamedResource.Desired(file.basename, secretName, hash, file.content));
+        }
+        return new DesiredSecrets(desired, envKeys);
+    }
+
+    private void logValidatePlan(PortainerBuildLogger log, List<SecretFile> files) {
+        log.info("Validate-only — skipping Docker secret mutations");
+        for (SecretFile file : files) {
+            String secretName = SwarmConfigNaming.configName(file.basename, file.content);
+            log.debug("(would create) " + secretName);
         }
     }
 
@@ -442,6 +490,16 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
         SecretFile(String basename, byte[] content) {
             this.basename = basename;
             this.content = content;
+        }
+    }
+
+    private static final class DesiredSecrets {
+        final List<SwarmNamedResource.Desired> desired;
+        final Map<String, String> envKeys;
+
+        DesiredSecrets(List<SwarmNamedResource.Desired> desired, Map<String, String> envKeys) {
+            this.desired = desired;
+            this.envKeys = envKeys;
         }
     }
 

@@ -2,10 +2,12 @@ package io.jenkins.plugins.portainer;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import hudson.util.StreamTaskListener;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -18,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -221,6 +224,203 @@ public class VaultClientTest {
         client.probeHealth(base, null);
         assertEquals(List.of("health"), callOrder);
         assertTrue(lastPath.get().endsWith("/v1/sys/health"));
+        }
+    }
+
+    @Test
+    public void probeHealth_standby429_accepted() throws Exception {
+        server.removeContext("/v1/sys/health");
+        server.createContext("/v1/sys/health", exchange -> {
+            callOrder.add("health");
+            lastNamespace.set(exchange.getRequestHeaders().getFirst("X-Vault-Namespace"));
+            respond(exchange, 429, "{\"initialized\":true,\"sealed\":false,\"standby\":true}");
+        });
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            client.probeHealth(base, "ns-health");
+        }
+        assertEquals("ns-health", lastNamespace.get());
+        assertEquals(List.of("health"), callOrder);
+    }
+
+    @Test
+    public void probeHealth_sealedFlag_aborts() {
+        server.removeContext("/v1/sys/health");
+        server.createContext("/v1/sys/health", exchange ->
+                respond(exchange, 200, "{\"initialized\":true,\"sealed\":true}"));
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () -> client.probeHealth(base, null));
+            assertTrue(ex.getMessage().toLowerCase().contains("sealed"));
+        }
+    }
+
+    @Test
+    public void probeHealth_uninitializedFlag_aborts() {
+        server.removeContext("/v1/sys/health");
+        server.createContext("/v1/sys/health", exchange ->
+                respond(exchange, 200, "{\"initialized\":false,\"sealed\":false}"));
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () -> client.probeHealth(base, null));
+            assertTrue(ex.getMessage().toLowerCase().contains("not initialized"));
+        }
+    }
+
+    @Test
+    public void probeHealth_http503_mappedToSealed() {
+        server.removeContext("/v1/sys/health");
+        server.createContext("/v1/sys/health", exchange ->
+                respond(exchange, 503, "{\"errors\":[\"sealed\"]}"));
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () -> client.probeHealth(base, null));
+            assertTrue(ex.getMessage().toLowerCase().contains("sealed"));
+        }
+    }
+
+    @Test
+    public void probeHealth_http501_mappedToUninitialized() {
+        server.removeContext("/v1/sys/health");
+        server.createContext("/v1/sys/health", exchange ->
+                respond(exchange, 501, "{\"errors\":[\"not initialized\"]}"));
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () -> client.probeHealth(base, null));
+            assertTrue(ex.getMessage().toLowerCase().contains("not initialized"));
+        }
+    }
+
+    @Test
+    public void readKvV2_rejectsNestedJsonValues() {
+        readBody.set("{\"data\":{\"data\":{\"nested\":{\"a\":1}},\"metadata\":{}}}");
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "secret", "secret", "myapp", null, null)));
+            assertTrue(ex.getMessage().toLowerCase().contains("nested")
+                    || ex.getMessage().toLowerCase().contains("flat"));
+            assertEquals(List.of("login", "kv", "revoke-self"), callOrder);
+        }
+    }
+
+    @Test
+    public void readKvV2_nullAndBlankKeys_andMissingDataWrapper() throws Exception {
+        readBody.set("{\"data\":{\"data\":{\"\": \"x\", \"ok\": null},\"metadata\":{}}}");
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            Map<String, String> secrets = client.readKvV2(new VaultClient.ReadRequest(
+                    base, "role", "secret", "secret", "myapp", null, null));
+            assertEquals("", secrets.get("ok"));
+            assertFalse(secrets.containsKey(""));
+        }
+
+        callOrder.clear();
+        revokeHits.set(0);
+        readBody.set("{\"auth\":{}}");
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "secret", "secret", "myapp", null, null)));
+            assertTrue(ex.getMessage().toLowerCase().contains("kv v2"));
+        }
+    }
+
+    @Test
+    public void readKvV2_missingClientToken_aborts() {
+        loginBody.set("{\"auth\":{}}");
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "secret", "secret", "myapp", null, null)));
+            assertTrue(ex.getMessage().toLowerCase().contains("client token"));
+            assertEquals(List.of("login"), callOrder);
+            assertEquals(0, revokeHits.get());
+        }
+    }
+
+    @Test
+    public void readKvV2_blankRoleId_aborts() {
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, " ", "secret", "secret", "myapp", null, null)));
+            assertTrue(ex.getMessage().toLowerCase().contains("role_id"));
+            assertEquals(List.of(), callOrder);
+        }
+    }
+
+    @Test
+    public void readKvV2_withBuildLog_revokeSoftFailLogged() throws Exception {
+        revokeCode.set(403);
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        StreamTaskListener listener = new StreamTaskListener(buf, StandardCharsets.UTF_8);
+        PortainerBuildLogger log =
+                new PortainerBuildLogger(java.util.logging.Logger.getLogger("VaultClientTest"), listener, true);
+        try (VaultClient client = new VaultClient(2000, 2000, log)) {
+            Map<String, String> secrets = client.readKvV2(new VaultClient.ReadRequest(
+                    base, "role", "secret", "secret", "myapp/prod", null, null));
+            assertEquals("1.2.3", secrets.get("IMAGE_TAG"));
+        }
+        String console = buf.toString(StandardCharsets.UTF_8);
+        assertTrue(console.contains("revoke-self") || console.toLowerCase().contains("revoke"));
+    }
+
+    @Test
+    public void httpError_andExtractErrors_branches() {
+        assertTrue(VaultClient.httpError(401, new byte[0], "login").getMessage().contains("401"));
+        assertTrue(VaultClient.httpError(403, "{\"errors\":[\"denied\"]}".getBytes(StandardCharsets.UTF_8), null)
+                .getMessage()
+                .contains("permission"));
+        assertTrue(VaultClient.httpError(404, "{\"message\":\"gone\"}".getBytes(StandardCharsets.UTF_8), "KV")
+                .getMessage()
+                .contains("404"));
+        assertTrue(VaultClient.httpError(500, "{\"error\":\"boom\"}".getBytes(StandardCharsets.UTF_8), "op")
+                .getMessage()
+                .contains("500"));
+
+        assertEquals("", VaultClient.extractErrors(null));
+        assertEquals("", VaultClient.extractErrors(new byte[0]));
+        assertEquals("", VaultClient.extractErrors("not-json".getBytes(StandardCharsets.UTF_8)));
+        assertTrue(VaultClient.extractErrors("{\"errors\":[\"a\",\"b\"]}".getBytes(StandardCharsets.UTF_8))
+                .contains("a"));
+        // secret-looking error text is suppressed
+        assertEquals(
+                "",
+                VaultClient.extractErrors(
+                        "{\"errors\":[\"client_token=hvs.abc\"]}".getBytes(StandardCharsets.UTF_8)));
+        assertEquals(
+                "",
+                VaultClient.extractErrors(
+                        "{\"message\":\"role_id leaked\"}".getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    public void normalizeAndParseHelpers() {
+        assertEquals("secret", VaultClient.normalizeMount(""));
+        assertEquals("secret", VaultClient.normalizeMount("  /secret/  "));
+        assertThrows(IllegalArgumentException.class, () -> VaultClient.normalizeMount("///"));
+
+        assertEquals("app", VaultClient.normalizeSecretPath("data/app"));
+        assertEquals("a/b", VaultClient.normalizeSecretPath("/a/b/"));
+        assertEquals("data", VaultClient.normalizeSecretPath("data/"));
+        assertThrows(IllegalArgumentException.class, () -> VaultClient.normalizeSecretPath(""));
+        assertThrows(IllegalArgumentException.class, () -> VaultClient.normalizeSecretPath("../x"));
+
+        assertNull(VaultClient.parseVersion(null));
+        assertNull(VaultClient.parseVersion("  "));
+        assertEquals(3, VaultClient.parseVersion("3"));
+        assertThrows(IllegalArgumentException.class, () -> VaultClient.parseVersion("0"));
+        assertThrows(IllegalArgumentException.class, () -> VaultClient.parseVersion("x"));
+
+        assertEquals("a/b", VaultClient.stripSurroundingSlashes("/a/b/"));
+        assertEquals("", VaultClient.stripSurroundingSlashes("///"));
+        assertEquals("a", VaultClient.stripLeadingSlashes("///a"));
+        assertEquals("a", VaultClient.stripTrailingSlashes("a///"));
+        assertNull(VaultClient.stripTrailingSlashes(null));
+        assertEquals("", VaultClient.stripTrailingSlashes(""));
+    }
+
+    @Test
+    public void preflightAppRole_sendsNamespace() throws Exception {
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            client.preflightAppRole(base, "role-abc", "secret-xyz", "enterprise-ns");
+            assertEquals("enterprise-ns", lastNamespace.get());
+            assertEquals(List.of("login", "lookup-self", "revoke-self"), callOrder);
         }
     }
 

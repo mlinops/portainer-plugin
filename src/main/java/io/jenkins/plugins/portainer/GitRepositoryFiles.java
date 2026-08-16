@@ -4,7 +4,6 @@ import hudson.FilePath;
 import hudson.Launcher;
 import hudson.model.TaskListener;
 import hudson.util.ArgumentListBuilder;
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
@@ -28,16 +28,15 @@ import java.util.function.Function;
 final class GitRepositoryFiles {
 
     /** When non-null, {@link #readFile} returns this result instead of cloning. */
-    @SuppressFBWarnings(
-            value = "UWF_UNWRITTEN_FIELD",
-            justification = "Assigned from unit tests (package-private test hook)")
-    static volatile Function<FetchRequest, String> testOverride;
+    static final AtomicReference<Function<FetchRequest, String>> testOverride = new AtomicReference<>();
 
     /** When non-null, {@link #listConfigFiles} returns this result instead of cloning. */
-    @SuppressFBWarnings(
-            value = "UWF_UNWRITTEN_FIELD",
-            justification = "Assigned from unit tests (package-private test hook)")
-    static volatile Function<ListRequest, List<SwarmConfigFile>> listTestOverride;
+    @FunctionalInterface
+    interface ListConfigFilesOverride {
+        List<SwarmConfigFile> apply(ListRequest req) throws IOException;
+    }
+
+    static final AtomicReference<ListConfigFilesOverride> listTestOverride = new AtomicReference<>();
 
     private static final String ASKPASS_USERNAME_FILE = "askpass.username";
     private static final String ASKPASS_PASSWORD_FILE = "askpass.password";
@@ -73,35 +72,52 @@ final class GitRepositoryFiles {
     }
 
     /**
+     * Clone execution context shared by {@link #readFile} and {@link #listConfigFiles}.
+     * {@code auth} is optional and never logged.
+     */
+    static final class CloneContext {
+        final PortainerCredentials.GitAuth auth;
+        final FilePath workspace;
+        final Launcher launcher;
+        final TaskListener listener;
+
+        CloneContext(
+                PortainerCredentials.GitAuth auth,
+                FilePath workspace,
+                Launcher launcher,
+                TaskListener listener) {
+            this.auth = auth;
+            this.workspace = workspace;
+            this.launcher = launcher;
+            this.listener = listener;
+        }
+    }
+
+    /**
      * Shallow-clone {@code repositoryUrl} at {@code reference} into a workspace temp dir and read
      * {@code relativePath}.
      *
-     * @param auth optional; never logged
+     * @param ctx clone context; {@code auth} optional and never logged
      * @return file content (may be empty string if the file is empty)
      */
     static String readFile(
-            String repositoryUrl,
-            String reference,
-            String relativePath,
-            PortainerCredentials.GitAuth auth,
-            FilePath workspace,
-            Launcher launcher,
-            TaskListener listener)
+            String repositoryUrl, String reference, String relativePath, CloneContext ctx)
             throws IOException, InterruptedException {
         String repo = GitRepositoryUrl.normalize(repositoryUrl);
         String path = PortainerComposePath.normalize(relativePath, "Values file path");
         String ref = defaultGitReference(reference);
 
-        Function<FetchRequest, String> override = testOverride;
+        Function<FetchRequest, String> override = testOverride.get();
         if (override != null) {
             return override.apply(new FetchRequest(repo, ref, path));
         }
         ConnectionTester.assertHostAllowed(repo, ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
-        requireCloneContext(workspace, launcher, "Helm values");
+        requireCloneContext(ctx.workspace, ctx.launcher, "Helm values");
 
-        FilePath tmp = workspace.createTempDir("portainer-helm-values", null);
+        FilePath tmp = ctx.workspace.createTempDir("portainer-helm-values", null);
         try {
-            FilePath checkout = shallowClone(repo, ref, auth, tmp, launcher, listener, "values");
+            FilePath checkout =
+                    shallowClone(repo, ref, ctx.auth, tmp, ctx.launcher, ctx.listener, "values");
             FilePath file = checkout.child(path);
             if (!file.exists()) {
                 throw new IOException("Values file not found in repository: " + path);
@@ -119,7 +135,7 @@ final class GitRepositoryFiles {
      * Shallow-clone {@code repositoryUrl} at {@code reference} and list files under {@code configPath}
      * matching {@code fileGlob} (Ant-style, relative to {@code configPath}).
      *
-     * @param auth optional; never logged
+     * @param ctx clone context; {@code auth} optional and never logged
      * @return config files with path relative to {@code configPath}
      */
     static List<SwarmConfigFile> listConfigFiles(
@@ -127,26 +143,24 @@ final class GitRepositoryFiles {
             String reference,
             String configPath,
             String fileGlob,
-            PortainerCredentials.GitAuth auth,
-            FilePath workspace,
-            Launcher launcher,
-            TaskListener listener)
+            CloneContext ctx)
             throws IOException, InterruptedException {
         String repo = GitRepositoryUrl.normalize(repositoryUrl);
         String dir = SwarmConfigNaming.normalizeConfigPath(configPath);
         String glob = SwarmConfigNaming.normalizeFileGlob(fileGlob);
         String ref = defaultGitReference(reference);
 
-        Function<ListRequest, List<SwarmConfigFile>> override = listTestOverride;
+        ListConfigFilesOverride override = listTestOverride.get();
         if (override != null) {
             return override.apply(new ListRequest(repo, ref, dir, glob));
         }
         ConnectionTester.assertHostAllowed(repo, ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
-        requireCloneContext(workspace, launcher, "Swarm configs");
+        requireCloneContext(ctx.workspace, ctx.launcher, "Swarm configs");
 
-        FilePath tmp = workspace.createTempDir("portainer-swarm-configs", null);
+        FilePath tmp = ctx.workspace.createTempDir("portainer-swarm-configs", null);
         try {
-            FilePath checkout = shallowClone(repo, ref, auth, tmp, launcher, listener, "config");
+            FilePath checkout =
+                    shallowClone(repo, ref, ctx.auth, tmp, ctx.launcher, ctx.listener, "config");
             return listMatchingConfigFiles(requireConfigDirectory(checkout.child(dir), dir), glob);
         } finally {
             deleteTempQuietly(tmp);
@@ -182,8 +196,9 @@ final class GitRepositoryFiles {
 
     static List<SwarmConfigFile> listMatchingConfigFiles(FilePath root, String glob)
             throws IOException, InterruptedException {
+        // FilePath.list(includes, excludes) is @NonNull (empty array when nothing matches).
         FilePath[] matches = root.list(glob, "");
-        if (matches == null || matches.length == 0) {
+        if (matches.length == 0) {
             return Collections.emptyList();
         }
         List<SwarmConfigFile> out = new ArrayList<>();
@@ -218,11 +233,10 @@ final class GitRepositoryFiles {
     static void deleteTempQuietly(FilePath tmp) {
         try {
             tmp.deleteRecursive();
-        } catch (IOException | InterruptedException cleanup) {
-            if (cleanup instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            // best-effort cleanup
+        } catch (InterruptedException cleanup) {
+            Thread.currentThread().interrupt();
+        } catch (IOException cleanup) {
+            // best-effort
         }
     }
 
