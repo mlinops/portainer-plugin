@@ -313,7 +313,7 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
                     log));
 
             Map<String, String> vaultData = resolveVault(run, buildEnv, item, connection, vaultFields, log);
-            if (vaultData == null || vaultData.isEmpty()) {
+            if (vaultData.isEmpty()) {
                 throw PortainerConnections.abort(
                         log,
                         "Vault path is empty: "
@@ -412,15 +412,13 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
             return Map.copyOf(override);
         }
         return VaultKv.resolve(new VaultKv.Request(
-                VaultKv.Policy.REQUIRED,
-                getVaultConnectionMode(),
-                fields,
-                vaultAppRoleCredentialsId,
-                run,
-                buildEnv,
-                item,
-                connection.connectTimeoutMs,
-                connection.readTimeoutMs,
+                new VaultKv.Request.VaultSpec(
+                        VaultKv.Policy.REQUIRED,
+                        getVaultConnectionMode(),
+                        fields,
+                        vaultAppRoleCredentialsId),
+                new VaultKv.Request.RunContext(run, buildEnv, item),
+                new VaultKv.Request.Timeouts(connection.connectTimeoutMs, connection.readTimeoutMs),
                 log));
     }
 

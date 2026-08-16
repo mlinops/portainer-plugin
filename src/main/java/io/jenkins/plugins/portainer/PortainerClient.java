@@ -240,25 +240,31 @@ final class PortainerClient implements AutoCloseable {
         }
         String want = stackName.trim();
         for (JsonNode stack : stacks) {
-            String name = text(stack, "Name");
-            if (!want.equals(name)) {
-                continue;
-            }
-            int ep = stack.path("EndpointId").asInt(Integer.MIN_VALUE);
-            if (ep == Integer.MIN_VALUE) {
-                ep = stack.path("EndpointID").asInt(Integer.MIN_VALUE);
-            }
-            if (ep == endpointId) {
-                int id = stack.path("Id").asInt(-1);
-                if (id < 0) {
-                    id = stack.path("ID").asInt(-1);
-                }
-                if (id >= 0) {
-                    return id;
-                }
+            int id = stackIdMatchingNameAndEndpoint(stack, want, endpointId);
+            if (id >= 0) {
+                return id;
             }
         }
         return -1;
+    }
+
+    /** @return stack id when name + endpoint match, otherwise {@code -1} */
+    private static int stackIdMatchingNameAndEndpoint(JsonNode stack, String wantName, int endpointId) {
+        if (!wantName.equals(text(stack, "Name"))) {
+            return -1;
+        }
+        int ep = stack.path("EndpointId").asInt(Integer.MIN_VALUE);
+        if (ep == Integer.MIN_VALUE) {
+            ep = stack.path("EndpointID").asInt(Integer.MIN_VALUE);
+        }
+        if (ep != endpointId) {
+            return -1;
+        }
+        int id = stack.path("Id").asInt(-1);
+        if (id < 0) {
+            id = stack.path("ID").asInt(-1);
+        }
+        return id;
     }
 
     /**
@@ -700,32 +706,16 @@ final class PortainerClient implements AutoCloseable {
             String baseUrl, String apiKey, int endpointId, DockerConfigCreateRequest request)
             throws IOException {
         Objects.requireNonNull(request, MSG_REQUEST);
-        if (request.name == null || request.name.isBlank()) {
-            throw new IOException("Docker config name is required.");
-        }
-        String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        ObjectNode body = MAPPER.createObjectNode();
-        body.put("Name", request.name.trim());
-        body.put("Data", Base64.getEncoder().encodeToString(request.data == null ? new byte[0] : request.data));
-        if (request.labels != null && !request.labels.isEmpty()) {
-            ObjectNode labels = MAPPER.createObjectNode();
-            for (Map.Entry<String, String> e : request.labels.entrySet()) {
-                if (e.getKey() != null && !e.getKey().isBlank()) {
-                    labels.put(e.getKey(), e.getValue() == null ? "" : e.getValue());
-                }
-            }
-            body.set(JSON_LABELS, labels);
-        }
-        try {
-            return httpJson(
-                    "POST",
-                    base + API_ENDPOINTS + endpointId + "/docker/configs/create",
-                    apiKey,
-                    body,
-                    "create config");
-        } catch (IOException e) {
-            throw mapDockerConfigCreateError(e, request.name);
-        }
+        return createDockerNamedResource(
+                baseUrl,
+                apiKey,
+                endpointId,
+                "config",
+                "configs",
+                "create config",
+                request.name,
+                request.data,
+                request.labels);
     }
 
     /**
@@ -776,32 +766,68 @@ final class PortainerClient implements AutoCloseable {
             String baseUrl, String apiKey, int endpointId, DockerSecretCreateRequest request)
             throws IOException {
         Objects.requireNonNull(request, MSG_REQUEST);
-        if (request.name == null || request.name.isBlank()) {
-            throw new IOException("Docker secret name is required.");
+        return createDockerNamedResource(
+                baseUrl,
+                apiKey,
+                endpointId,
+                "secret",
+                "secrets",
+                "create secret",
+                request.name,
+                request.data,
+                request.labels);
+    }
+
+    private JsonNode createDockerNamedResource(
+            String baseUrl,
+            String apiKey,
+            int endpointId,
+            String kind,
+            String dockerPathSegment,
+            String debugNote,
+            String name,
+            byte[] data,
+            Map<String, String> labels)
+            throws IOException {
+        if (name == null || name.isBlank()) {
+            throw new IOException("Docker " + kind + " name is required.");
         }
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        ObjectNode body = MAPPER.createObjectNode();
-        body.put("Name", request.name.trim());
-        body.put("Data", Base64.getEncoder().encodeToString(request.data == null ? new byte[0] : request.data));
-        if (request.labels != null && !request.labels.isEmpty()) {
-            ObjectNode labels = MAPPER.createObjectNode();
-            for (Map.Entry<String, String> e : request.labels.entrySet()) {
-                if (e.getKey() != null && !e.getKey().isBlank()) {
-                    labels.put(e.getKey(), e.getValue() == null ? "" : e.getValue());
-                }
-            }
-            body.set(JSON_LABELS, labels);
-        }
+        ObjectNode body = dockerNamedResourceBody(name.trim(), data, labels);
         try {
             return httpJson(
                     "POST",
-                    base + API_ENDPOINTS + endpointId + "/docker/secrets/create",
+                    base + API_ENDPOINTS + endpointId + "/docker/" + dockerPathSegment + "/create",
                     apiKey,
                     body,
-                    "create secret");
+                    debugNote);
         } catch (IOException e) {
-            throw mapDockerSecretCreateError(e, request.name);
+            throw mapDockerNamedResourceCreateError(e, kind, name);
         }
+    }
+
+    private static ObjectNode dockerNamedResourceBody(String name, byte[] data, Map<String, String> labels) {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("Name", name);
+        body.put("Data", Base64.getEncoder().encodeToString(data == null ? new byte[0] : data));
+        ObjectNode labelNode = dockerLabelsObject(labels);
+        if (labelNode != null) {
+            body.set(JSON_LABELS, labelNode);
+        }
+        return body;
+    }
+
+    private static ObjectNode dockerLabelsObject(Map<String, String> labels) {
+        if (labels == null || labels.isEmpty()) {
+            return null;
+        }
+        ObjectNode out = MAPPER.createObjectNode();
+        for (Map.Entry<String, String> e : labels.entrySet()) {
+            if (e.getKey() != null && !e.getKey().isBlank()) {
+                out.put(e.getKey(), e.getValue() == null ? "" : e.getValue());
+            }
+        }
+        return out;
     }
 
     /**
@@ -848,28 +874,23 @@ final class PortainerClient implements AutoCloseable {
         return Collections.unmodifiableMap(out);
     }
 
-    private static IOException mapDockerConfigCreateError(IOException e, String configName) {
+    private static IOException mapDockerNamedResourceCreateError(IOException e, String kind, String name) {
         String msg = e.getMessage() == null ? "" : e.getMessage();
-        if (msg.contains("409")) {
-            return new IOException(
-                    "Docker config name \"" + configName + "\" already exists with different content. "
-                            + "Content-hash naming should prevent this — check for a manual config or hash collision. "
-                            + "Detail: " + truncateDetail(msg),
-                    e);
+        if (!msg.contains("409")) {
+            return e;
         }
-        return e;
-    }
-
-    private static IOException mapDockerSecretCreateError(IOException e, String secretName) {
-        String msg = e.getMessage() == null ? "" : e.getMessage();
-        if (msg.contains("409")) {
-            return new IOException(
-                    "Docker secret name \"" + secretName + "\" already exists with different content. "
-                            + "Content-hash naming should prevent this — check for a manual secret or hash collision. "
-                            + "Detail: " + truncateDetail(msg),
-                    e);
-        }
-        return e;
+        return new IOException(
+                "Docker "
+                        + kind
+                        + " name \""
+                        + name
+                        + "\" already exists with different content. "
+                        + "Content-hash naming should prevent this — check for a manual "
+                        + kind
+                        + " or hash collision. "
+                        + "Detail: "
+                        + truncateDetail(msg),
+                e);
     }
 
     /**
@@ -979,69 +1000,96 @@ final class PortainerClient implements AutoCloseable {
 
     private JsonNode httpJson(String method, String apiUrl, String apiKey, JsonNode body, String debugNote)
             throws IOException {
+        requireApiKey(apiKey);
+        URI uri = createApiUri(apiUrl);
+        assertRequestHostsAllowed(apiUrl, uri);
+
+        String m = method == null ? "GET" : method.toUpperCase(Locale.ROOT);
+        HttpRequest request = buildHttpRequest(uri, apiKey, m, body);
+
+        long startedNs = System.nanoTime();
+        HttpResponse<byte[]> response = sendHttp(request, uri);
+        long durationMs = (System.nanoTime() - startedNs) / 1_000_000L;
+        String path = PortainerBuildLogger.safeRequestPath(uri);
+
+        assertResponseHostAllowed(response);
+        return readHttpJsonBody(m, path, durationMs, debugNote, response, uri);
+    }
+
+    private static void requireApiKey(String apiKey) throws IOException {
         if (apiKey == null || apiKey.isBlank()) {
             throw new IOException("Portainer API key is required.");
         }
-        final URI uri;
+    }
+
+    private static URI createApiUri(String apiUrl) throws IOException {
         try {
-            uri = URI.create(apiUrl);
+            return URI.create(apiUrl);
         } catch (IllegalArgumentException e) {
             throw new IOException("invalid Portainer API URL", e);
         }
+    }
+
+    private static void assertRequestHostsAllowed(String apiUrl, URI uri) throws IOException {
         try {
             ConnectionTester.assertHostAllowed(apiUrl, ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
             ConnectionTester.assertUriHostAllowed(uri);
         } catch (IllegalArgumentException e) {
             throw new IOException(e.getMessage(), e);
         }
+    }
 
+    private HttpRequest buildHttpRequest(URI uri, String apiKey, String method, JsonNode body)
+            throws IOException {
         HttpRequest.Builder req = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofMillis(Math.max(1, readTimeoutMs)))
                 .header("X-API-Key", apiKey)
                 .header("Accept", "application/json");
-
-        String m = method == null ? "GET" : method.toUpperCase(Locale.ROOT);
-        if ("GET".equals(m) || HTTP_DELETE.equals(m)) {
-            req.method(m, HttpRequest.BodyPublishers.noBody());
+        if ("GET".equals(method) || HTTP_DELETE.equals(method)) {
+            req.method(method, HttpRequest.BodyPublishers.noBody());
         } else {
             req.header("Content-Type", "application/json");
             byte[] bytes = body == null ? "{}".getBytes(StandardCharsets.UTF_8) : MAPPER.writeValueAsBytes(body);
-            req.method(m, HttpRequest.BodyPublishers.ofByteArray(bytes));
+            req.method(method, HttpRequest.BodyPublishers.ofByteArray(bytes));
         }
+        return req.build();
+    }
 
-        long startedNs = System.nanoTime();
-        final HttpResponse<byte[]> response;
+    private HttpResponse<byte[]> sendHttp(HttpRequest request, URI uri) throws IOException {
         try {
-            response = http.send(req.build(), HttpResponse.BodyHandlers.ofByteArray());
+            return http.send(request, HttpResponse.BodyHandlers.ofByteArray());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Portainer HTTP request interrupted", e);
         } catch (IOException e) {
             throw mapTransportError(uri, e);
         }
+    }
 
-        long durationMs = (System.nanoTime() - startedNs) / 1_000_000L;
-        String path = PortainerBuildLogger.safeRequestPath(uri);
-
+    private static void assertResponseHostAllowed(HttpResponse<?> response) throws IOException {
         try {
             ConnectionTester.assertUriHostAllowed(response.uri());
         } catch (IllegalArgumentException e) {
             throw new IOException(e.getMessage(), e);
         }
+    }
 
+    private JsonNode readHttpJsonBody(
+            String method,
+            String path,
+            long durationMs,
+            String debugNote,
+            HttpResponse<byte[]> response,
+            URI uri)
+            throws IOException {
         int code = response.statusCode();
         byte[] bytes = response.body() == null ? new byte[0] : response.body();
         if (code < 200 || code >= 300) {
-            if (buildLog != null) {
-                buildLog.http(m, path, durationMs, debugNote);
-                if (buildLog.isVerbose()) {
-                    buildLog.debug(HTTP_STATUS_PREFIX + code + " raw response body: " + rawErrorBodyForDebug(bytes));
-                }
-            }
+            logHttpFailure(method, path, durationMs, debugNote, code, bytes);
             throw httpError(code, bytes, uri);
         }
         if (buildLog != null) {
-            buildLog.http(m, path, durationMs, debugNote);
+            buildLog.http(method, path, durationMs, debugNote);
         }
         if (bytes.length == 0) {
             return MAPPER.createObjectNode();
@@ -1049,30 +1097,61 @@ final class PortainerClient implements AutoCloseable {
         return MAPPER.readTree(bytes);
     }
 
+    private void logHttpFailure(
+            String method, String path, long durationMs, String debugNote, int code, byte[] bytes) {
+        if (buildLog == null) {
+            return;
+        }
+        buildLog.http(method, path, durationMs, debugNote);
+        if (buildLog.isVerbose()) {
+            buildLog.debug(HTTP_STATUS_PREFIX + code + " raw response body: " + rawErrorBodyForDebug(bytes));
+        }
+    }
+
     static IOException mapTransportError(URI uri, IOException e) {
         if (e instanceof HttpTimeoutException) {
             return new IOException(timeoutMessage(uri), e);
         }
-        Throwable t = e;
-        while (t != null) {
-            if (t instanceof UnknownHostException) {
-                String host = uri == null ? null : uri.getHost();
-                return new IOException(
-                        "Portainer host could not be resolved"
-                                + (host == null || host.isBlank() ? "." : ": " + host + "."),
-                        e);
-            }
-            if (t instanceof ConnectException
-                    || isConnectivityMessage(t.getMessage() == null ? "" : t.getMessage())) {
-                return new IOException(connectivityMessage(uri, t.getMessage()), e);
-            }
-            t = t.getCause();
+        IOException fromCause = mapTransportCauseChain(uri, e);
+        if (fromCause != null) {
+            return fromCause;
         }
         String msg = e.getMessage() == null ? "" : e.getMessage();
         if (isConnectivityMessage(msg)) {
             return new IOException(connectivityMessage(uri, msg), e);
         }
         return e;
+    }
+
+    private static IOException mapTransportCauseChain(URI uri, IOException root) {
+        Throwable t = root;
+        while (t != null) {
+            IOException mapped = mapTransportCause(uri, t, root);
+            if (mapped != null) {
+                return mapped;
+            }
+            t = t.getCause();
+        }
+        return null;
+    }
+
+    private static IOException mapTransportCause(URI uri, Throwable t, IOException root) {
+        if (t instanceof UnknownHostException) {
+            return new IOException(unknownHostMessage(uri), root);
+        }
+        if (t instanceof ConnectException
+                || isConnectivityMessage(t.getMessage() == null ? "" : t.getMessage())) {
+            return new IOException(connectivityMessage(uri, t.getMessage()), root);
+        }
+        return null;
+    }
+
+    private static String unknownHostMessage(URI uri) {
+        String host = uri == null ? null : uri.getHost();
+        if (host == null || host.isBlank()) {
+            return "Portainer host could not be resolved.";
+        }
+        return "Portainer host could not be resolved: " + host + ".";
     }
 
     static IOException httpError(int code, byte[] bodyBytes, URI uri) {
@@ -1161,27 +1240,20 @@ final class PortainerClient implements AutoCloseable {
         if (raw.isEmpty()) {
             return "";
         }
+        String fromJson = tryExtractJsonErrorDetail(raw);
+        if (fromJson != null) {
+            return fromJson;
+        }
+        return truncateDetail(sanitizeErrorDetail(raw.replaceAll("\\s+", " ")));
+    }
+
+    /** @return sanitized detail, or {@code null} when body is not usable JSON error text */
+    private static String tryExtractJsonErrorDetail(String raw) {
         try {
             JsonNode node = MAPPER.readTree(raw);
-            JsonNode errors = node.get("errors");
-            if (errors != null && errors.isArray() && !errors.isEmpty()) {
-                StringBuilder joined = new StringBuilder();
-                for (JsonNode item : errors) {
-                    if (item == null || item.isNull()) {
-                        continue;
-                    }
-                    String part = item.asText("").trim();
-                    if (part.isEmpty()) {
-                        continue;
-                    }
-                    if (joined.length() > 0) {
-                        joined.append("; ");
-                    }
-                    joined.append(part);
-                }
-                if (joined.length() > 0) {
-                    return truncateDetail(sanitizeErrorDetail(joined.toString()));
-                }
+            String fromErrors = joinErrorsArray(node.get("errors"));
+            if (fromErrors != null) {
+                return fromErrors;
             }
             String message = firstNonBlank(text(node, "message"), text(node, "Message"));
             String details = firstNonBlank(text(node, "details"), text(node, "Details"));
@@ -1193,7 +1265,35 @@ final class PortainerClient implements AutoCloseable {
         } catch (IOException ignored) {
             // fall through to raw body
         }
-        return truncateDetail(sanitizeErrorDetail(raw.replaceAll("\\s+", " ")));
+        return null;
+    }
+
+    private static String joinErrorsArray(JsonNode errors) {
+        if (errors == null || !errors.isArray() || errors.isEmpty()) {
+            return null;
+        }
+        StringBuilder joined = new StringBuilder();
+        for (JsonNode item : errors) {
+            appendErrorArrayItem(joined, item);
+        }
+        if (joined.length() == 0) {
+            return null;
+        }
+        return truncateDetail(sanitizeErrorDetail(joined.toString()));
+    }
+
+    private static void appendErrorArrayItem(StringBuilder joined, JsonNode item) {
+        if (item == null || item.isNull()) {
+            return;
+        }
+        String part = item.asText("").trim();
+        if (part.isEmpty()) {
+            return;
+        }
+        if (joined.length() > 0) {
+            joined.append("; ");
+        }
+        joined.append(part);
     }
 
     /** Merge Portainer JSON error fields without dropping {@code details} behind a generic {@code message}. */

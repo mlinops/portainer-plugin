@@ -22,42 +22,48 @@ final class PortainerEnvParser {
         if (envText == null || envText.isBlank()) {
             return out;
         }
-        String[] lines = envText.split("\\R");
-        for (String raw : lines) {
-            if (raw == null) {
+        for (String raw : envText.split("\\R")) {
+            if (shouldSkip(raw)) {
                 continue;
             }
-            String line = raw.trim();
-            if (line.isEmpty() || line.startsWith("#")) {
-                continue;
-            }
-            int eq = line.indexOf('=');
-            if (eq < 0) {
-                if (!KEY_PATTERN.matcher(line).matches()) {
-                    throw new IllegalArgumentException(
-                            "Invalid env key (use letters, digits, and '_'; starting with a letter or '_'): "
-                                    + truncate(line, 80) + ".");
-                }
-                out.add(new PortainerClient.EnvPair(line, "${" + line + "}"));
-                continue;
-            }
-            if (eq == 0) {
-                throw new IllegalArgumentException(
-                        "Invalid env line (expected KEY=VALUE or KEY): " + truncate(line, 80) + ".");
-            }
-            String key = line.substring(0, eq).trim();
-            String value = line.substring(eq + 1);
-            if (key.isEmpty()) {
-                throw new IllegalArgumentException("Invalid env line: empty key.");
-            }
-            if (!KEY_PATTERN.matcher(key).matches()) {
-                throw new IllegalArgumentException(
-                        "Invalid env key (use letters, digits, and '_'; starting with a letter or '_'): "
-                                + truncate(key, 80) + ".");
-            }
-            out.add(new PortainerClient.EnvPair(key, value));
+            out.add(parseLine(raw.trim()));
         }
         return out;
+    }
+
+    private static boolean shouldSkip(String raw) {
+        if (raw == null) {
+            return true;
+        }
+        String line = raw.trim();
+        return line.isEmpty() || line.startsWith("#");
+    }
+
+    private static PortainerClient.EnvPair parseLine(String line) {
+        int eq = line.indexOf('=');
+        if (eq < 0) {
+            requireValidKey(line);
+            return new PortainerClient.EnvPair(line, "${" + line + "}");
+        }
+        if (eq == 0) {
+            throw new IllegalArgumentException(
+                    "Invalid env line (expected KEY=VALUE or KEY): " + truncate(line, 80) + ".");
+        }
+        String key = line.substring(0, eq).trim();
+        String value = line.substring(eq + 1);
+        if (key.isEmpty()) {
+            throw new IllegalArgumentException("Invalid env line: empty key.");
+        }
+        requireValidKey(key);
+        return new PortainerClient.EnvPair(key, value);
+    }
+
+    private static void requireValidKey(String key) {
+        if (!KEY_PATTERN.matcher(key).matches()) {
+            throw new IllegalArgumentException(
+                    "Invalid env key (use letters, digits, and '_'; starting with a letter or '_'): "
+                            + truncate(key, 80) + ".");
+        }
     }
 
     private static String truncate(String s, int max) {

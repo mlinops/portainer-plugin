@@ -20,7 +20,6 @@ import java.util.Map;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -39,29 +38,23 @@ class VaultKvTest {
     }
 
     @Test
-    void optionalSoftSkip_noneMode_returnsNull() throws Exception {
-        Map<String, String> data = VaultKv.resolve(new VaultKv.Request(
+    void optionalSoftSkip_noneMode_returnsEmpty() throws Exception {
+        Map<String, String> data = VaultKv.resolve(request(
                 VaultKv.Policy.OPTIONAL_SOFT_SKIP,
                 ConnectionMode.NONE,
-                null,
-                null,
-                null,
                 null,
                 null,
                 0,
                 0,
                 quietLog()));
-        assertNull(data);
+        assertTrue(data.isEmpty());
     }
 
     @Test
     void required_noneMode_aborts() {
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.NONE,
-                null,
-                null,
-                null,
                 null,
                 null,
                 0,
@@ -71,34 +64,28 @@ class VaultKvTest {
     }
 
     @Test
-    void optionalSoftSkip_emptyPath_returnsNull() throws Exception {
+    void optionalSoftSkip_emptyPath_returnsEmpty() throws Exception {
         VaultFields fields = VaultFields.parse("", "secret", null, null, null, null);
-        Map<String, String> data = VaultKv.resolve(new VaultKv.Request(
+        Map<String, String> data = VaultKv.resolve(request(
                 VaultKv.Policy.OPTIONAL_SOFT_SKIP,
                 ConnectionMode.INHERIT,
                 fields,
                 null,
-                null,
-                null,
-                null,
                 0,
                 0,
                 quietLog()));
-        assertNull(data);
+        assertTrue(data.isEmpty());
     }
 
     @Test
     void optionalSoftSkip_manualPartialWithoutPath_aborts() {
         VaultFields fields = VaultFields.parse(
                 "", "secret", null, null, "https://vault.example", null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.OPTIONAL_SOFT_SKIP,
                 ConnectionMode.MANUAL,
                 fields,
                 "approle-cred",
-                null,
-                null,
-                null,
                 0,
                 0,
                 quietLog())));
@@ -108,14 +95,11 @@ class VaultKvTest {
     @Test
     void optionalSoftSkip_manualPartialWithOnlyCreds_aborts() {
         VaultFields fields = VaultFields.parse("", "secret", null, null, null, null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.OPTIONAL_SOFT_SKIP,
                 ConnectionMode.MANUAL,
                 fields,
                 "approle-only",
-                null,
-                null,
-                null,
                 0,
                 0,
                 quietLog())));
@@ -125,13 +109,10 @@ class VaultKvTest {
     @Test
     void required_blankPath_aborts() {
         VaultFields fields = VaultFields.parse("", "secret", null, null, null, null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.INHERIT,
                 fields,
-                null,
-                null,
-                null,
                 null,
                 0,
                 0,
@@ -143,14 +124,11 @@ class VaultKvTest {
     void required_manualMissingCreds_aborts() {
         VaultFields fields = VaultFields.parse(
                 "apps/rabbitmq", "secret", null, null, "https://vault.example", null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.MANUAL,
                 fields,
                 "",
-                null,
-                null,
-                null,
                 0,
                 0,
                 quietLog())));
@@ -161,14 +139,11 @@ class VaultKvTest {
     void optionalSoftSkip_manualPathMissingUrl_aborts() {
         VaultFields fields = VaultFields.parse(
                 "apps/rabbitmq", "secret", null, null, "", null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.OPTIONAL_SOFT_SKIP,
                 ConnectionMode.MANUAL,
                 fields,
                 "approle-cred",
-                null,
-                null,
-                null,
                 0,
                 0,
                 quietLog())));
@@ -184,12 +159,9 @@ class VaultKvTest {
 
     @Test
     void nullLog_aborts() {
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.INHERIT,
-                null,
-                null,
-                null,
                 null,
                 null,
                 0,
@@ -202,13 +174,10 @@ class VaultKvTest {
     void inherit_withoutPlugin_aborts(JenkinsRule jenkins) {
         VaultFields fields = VaultFields.parse(
                 "apps/demo", "secret", "3", null, null, null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.INHERIT,
                 fields,
-                null,
-                null,
-                null,
                 null,
                 0,
                 0,
@@ -223,13 +192,10 @@ class VaultKvTest {
     void inherit_required_remapsNotFoundMessage(JenkinsRule jenkins) {
         // Without plugin the message is "not installed" — still exercises inherit catch+abort path.
         VaultFields fields = VaultFields.parse("missing/path", "secret", null, null, null, null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.INHERIT,
                 fields,
-                null,
-                null,
-                null,
                 null,
                 0,
                 0,
@@ -250,14 +216,11 @@ class VaultKvTest {
 
         VaultFields fields = VaultFields.parse(
                 "apps/demo", "secret", null, null, "not-a-url", null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.MANUAL,
                 fields,
                 "vault-kv-approle",
-                null,
-                null,
-                null,
                 2000,
                 2000,
                 quietLog())));
@@ -268,14 +231,11 @@ class VaultKvTest {
     void manual_missingAppRoleCredential_aborts(JenkinsRule jenkins) {
         VaultFields fields = VaultFields.parse(
                 "apps/demo", "secret", null, null, "https://vault.example", null);
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.MANUAL,
                 fields,
                 "no-such-approle",
-                null,
-                null,
-                null,
                 0,
                 0,
                 quietLog())));
@@ -300,14 +260,11 @@ class VaultKvTest {
         VaultFields fields = VaultFields.parse(
                 "myapp/prod", "secret", "1", "ns1", baseUrl, null);
 
-        Map<String, String> data = VaultKv.resolve(new VaultKv.Request(
+        Map<String, String> data = VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.MANUAL,
                 fields,
                 "vault-kv-ok",
-                null,
-                null,
-                null,
                 2000,
                 2000,
                 quietLog()));
@@ -332,14 +289,11 @@ class VaultKvTest {
         VaultFields fields = VaultFields.parse(
                 "missing/path", "secret", null, null, baseUrl, null);
 
-        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(new VaultKv.Request(
+        AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,
                 ConnectionMode.MANUAL,
                 fields,
                 "vault-kv-404",
-                null,
-                null,
-                null,
                 2000,
                 2000,
                 quietLog())));
@@ -365,14 +319,11 @@ class VaultKvTest {
         VaultFields fields = VaultFields.parse(
                 "stack/env", "secret", null, null, baseUrl, null);
 
-        Map<String, String> data = VaultKv.resolve(new VaultKv.Request(
+        Map<String, String> data = VaultKv.resolve(request(
                 VaultKv.Policy.OPTIONAL_SOFT_SKIP,
                 ConnectionMode.MANUAL,
                 fields,
                 "vault-kv-soft",
-                null,
-                null,
-                null,
                 2000,
                 2000,
                 quietLog()));
@@ -399,6 +350,21 @@ class VaultKvTest {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    private static VaultKv.Request request(
+            VaultKv.Policy policy,
+            String mode,
+            VaultFields fields,
+            String appRoleCredentialsId,
+            int connectTimeoutMs,
+            int readTimeoutMs,
+            PortainerBuildLogger log) {
+        return new VaultKv.Request(
+                new VaultKv.Request.VaultSpec(policy, mode, fields, appRoleCredentialsId),
+                new VaultKv.Request.RunContext(null, null, null),
+                new VaultKv.Request.Timeouts(connectTimeoutMs, readTimeoutMs),
+                log);
     }
 
     private static PortainerBuildLogger quietLog() {

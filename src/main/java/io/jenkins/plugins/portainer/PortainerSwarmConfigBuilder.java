@@ -1,6 +1,7 @@
 package io.jenkins.plugins.portainer;
 
 import edu.umd.cs.findbugs.annotations.NonNull;
+import hudson.AbortException;
 import hudson.EnvVars;
 import hudson.Extension;
 import hudson.FilePath;
@@ -224,11 +225,7 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
 
         final int endpoint = PortainerConnections.abortOn(
                 log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
-
-        if (!NAMING_CONTENT_HASH.equals(getNamingStrategy())) {
-            throw PortainerConnections.abort(
-                    log, "Unsupported namingStrategy \"" + getNamingStrategy() + "\" — only contentHash is supported.");
-        }
+        requireContentHashNaming(log);
 
         final String repoUrl = PortainerConnections.abortOn(log, () -> GitRepositoryUrl.normalize(repositoryUrl));
         final String configDir = PortainerConnections.abortOn(
@@ -258,46 +255,17 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
         try (PortainerClient client = new PortainerClient(
                 connection.connectTimeoutMs, connection.readTimeoutMs, log)) {
             PortainerConnections.runPreflight(client, connection, apiKey, endpoint, false, log);
-
-            try {
-                client.resolveSwarmId(connection.baseUrl, apiKey, endpoint);
-            } catch (IOException e) {
-                throw PortainerConnections.abort(
-                        log,
-                        "Swarm preflight failed for endpoint " + endpoint + ": "
-                                + PortainerConnections.truncateMessage(e),
-                        e);
-            }
+            resolveSwarmOrAbort(client, connection, apiKey, endpoint, log);
 
             PortainerBuildLogger.logGitPreflight(log, gitRef, repoUrl, configDir, glob, null, null);
-            List<SwarmConfigFile> files;
-            try {
-                files = GitRepositoryFiles.listConfigFiles(
-                        repoUrl, gitRef, configDir, glob, gitAuth, workspace, launcher, listener);
-            } catch (IOException e) {
-                String msg = PortainerConnections.truncateMessage(e);
-                if (msg.startsWith("Config path not found")
-                        || msg.startsWith("Config path is not a directory")) {
-                    throw PortainerConnections.abort(log, msg, e);
-                }
-                throw PortainerConnections.abort(
-                        log, "Failed to read config files from Git: " + msg, e);
-            }
+            List<SwarmConfigFile> files = listConfigFilesFromGit(
+                    new GitConfigListRequest(
+                            repoUrl, gitRef, configDir, glob, gitAuth, workspace, launcher, listener),
+                    log);
 
             log.info("Git path=" + configDir);
-            if (files.isEmpty()) {
-                throw PortainerConnections.abort(
-                        log,
-                        "No config files matched configPath=" + configDir + " fileGlob=" + glob
-                                + " in repository " + repoUrl);
-            }
-
             log.info("Configs found in Git - " + files.size());
-            List<String> configNames = new ArrayList<>();
-            for (SwarmConfigFile file : files) {
-                configNames.add(SwarmConfigNaming.basenameFromRelativePath(file.relativePath));
-            }
-            log.debug("Configs found in Git: " + PortainerBuildLogger.formatNameList(configNames));
+            logConfigBasenames(log, files);
 
             if (validateOnly) {
                 logValidatePlan(log, files);
@@ -305,21 +273,7 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
                 return;
             }
 
-            Map<String, String> envKeys = new LinkedHashMap<>();
-            List<SwarmNamedResource.Desired> desired = new ArrayList<>();
-            for (SwarmConfigFile file : files) {
-                String basename = SwarmConfigNaming.basenameFromRelativePath(file.relativePath);
-                String hash = SwarmConfigNaming.hash8(file.content);
-                String configName = SwarmConfigNaming.configName(basename, file.content);
-                String envKey = SwarmConfigNaming.envKeyForBasename(basename);
-                String previous = envKeys.put(envKey, configName);
-                if (previous != null && !previous.equals(configName)) {
-                    throw PortainerConnections.abort(
-                            log,
-                            "Duplicate env key " + envKey + " from config files (keep unique basenames).");
-                }
-                desired.add(new SwarmNamedResource.Desired(basename, configName, hash, file.content));
-            }
+            DesiredConfigs desiredConfigs = buildDesiredConfigs(files, log);
 
             SwarmNamedResource.Outcome outcome = SwarmNamedResource.ensure(
                     SwarmNamedResource.Kind.CONFIG,
@@ -329,7 +283,7 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
                             apiKey,
                             endpoint,
                             new PortainerClient.DockerConfigCreateRequest(name, data, labels)),
-                    desired,
+                    desiredConfigs.desired,
                     (labels, desiredItem) -> {
                         String gitSha = SwarmConfigNaming.labelGitSha(gitRef);
                         if (!gitSha.isBlank()) {
@@ -347,11 +301,134 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
                         log);
             }
 
-            if (!envKeys.isEmpty()) {
-                run.addAction(new PortainerSwarmConfigEnvAction(envKeys));
+            if (!desiredConfigs.envKeys.isEmpty()) {
+                run.addAction(new PortainerSwarmConfigEnvAction(desiredConfigs.envKeys));
             }
 
             summarize(log, startedNs, files.size(), outcome.created, outcome.skipped);
+        }
+    }
+
+    private void requireContentHashNaming(PortainerBuildLogger log) throws AbortException {
+        if (!NAMING_CONTENT_HASH.equals(getNamingStrategy())) {
+            throw PortainerConnections.abort(
+                    log, "Unsupported namingStrategy \"" + getNamingStrategy() + "\" — only contentHash is supported.");
+        }
+    }
+
+    private static void resolveSwarmOrAbort(
+            PortainerClient client,
+            ResolvedConnection connection,
+            String apiKey,
+            int endpoint,
+            PortainerBuildLogger log) throws AbortException {
+        try {
+            client.resolveSwarmId(connection.baseUrl, apiKey, endpoint);
+        } catch (IOException e) {
+            throw PortainerConnections.abort(
+                    log,
+                    "Swarm preflight failed for endpoint " + endpoint + ": "
+                            + PortainerConnections.truncateMessage(e),
+                    e);
+        }
+    }
+
+    private static List<SwarmConfigFile> listConfigFilesFromGit(
+            GitConfigListRequest req, PortainerBuildLogger log) throws InterruptedException, IOException {
+        List<SwarmConfigFile> files;
+        try {
+            files = GitRepositoryFiles.listConfigFiles(
+                    req.repoUrl,
+                    req.gitRef,
+                    req.configDir,
+                    req.glob,
+                    req.gitAuth,
+                    req.workspace,
+                    req.launcher,
+                    req.listener);
+        } catch (IOException e) {
+            String msg = PortainerConnections.truncateMessage(e);
+            if (msg.startsWith("Config path not found")
+                    || msg.startsWith("Config path is not a directory")) {
+                throw PortainerConnections.abort(log, msg, e);
+            }
+            throw PortainerConnections.abort(
+                    log, "Failed to read config files from Git: " + msg, e);
+        }
+        if (files.isEmpty()) {
+            throw PortainerConnections.abort(
+                    log,
+                    "No config files matched configPath=" + req.configDir + " fileGlob=" + req.glob
+                            + " in repository " + req.repoUrl);
+        }
+        return files;
+    }
+
+    private static void logConfigBasenames(PortainerBuildLogger log, List<SwarmConfigFile> files) {
+        List<String> configNames = new ArrayList<>();
+        for (SwarmConfigFile file : files) {
+            configNames.add(SwarmConfigNaming.basenameFromRelativePath(file.relativePath));
+        }
+        log.debug("Configs found in Git: " + PortainerBuildLogger.formatNameList(configNames));
+    }
+
+    private static DesiredConfigs buildDesiredConfigs(List<SwarmConfigFile> files, PortainerBuildLogger log)
+            throws AbortException {
+        Map<String, String> envKeys = new LinkedHashMap<>();
+        List<SwarmNamedResource.Desired> desired = new ArrayList<>();
+        for (SwarmConfigFile file : files) {
+            String basename = SwarmConfigNaming.basenameFromRelativePath(file.relativePath);
+            String hash = SwarmConfigNaming.hash8(file.content);
+            String configName = SwarmConfigNaming.configName(basename, file.content);
+            String envKey = SwarmConfigNaming.envKeyForBasename(basename);
+            String previous = envKeys.put(envKey, configName);
+            if (previous != null && !previous.equals(configName)) {
+                throw PortainerConnections.abort(
+                        log,
+                        "Duplicate env key " + envKey + " from config files (keep unique basenames).");
+            }
+            desired.add(new SwarmNamedResource.Desired(basename, configName, hash, file.content));
+        }
+        return new DesiredConfigs(desired, envKeys);
+    }
+
+    private static final class GitConfigListRequest {
+        final String repoUrl;
+        final String gitRef;
+        final String configDir;
+        final String glob;
+        final PortainerCredentials.GitAuth gitAuth;
+        final FilePath workspace;
+        final Launcher launcher;
+        final TaskListener listener;
+
+        GitConfigListRequest(
+                String repoUrl,
+                String gitRef,
+                String configDir,
+                String glob,
+                PortainerCredentials.GitAuth gitAuth,
+                FilePath workspace,
+                Launcher launcher,
+                TaskListener listener) {
+            this.repoUrl = repoUrl;
+            this.gitRef = gitRef;
+            this.configDir = configDir;
+            this.glob = glob;
+            this.gitAuth = gitAuth;
+            this.workspace = workspace;
+            this.launcher = launcher;
+            this.listener = listener;
+        }
+    }
+
+    private static final class DesiredConfigs {
+        final List<SwarmNamedResource.Desired> desired;
+        final Map<String, String> envKeys;
+
+        DesiredConfigs(List<SwarmNamedResource.Desired> desired, Map<String, String> envKeys) {
+            this.desired = desired;
+            this.envKeys = envKeys;
         }
     }
 
@@ -401,14 +478,16 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
 
         @Override
         public Builder newInstance(StaplerRequest2 req, JSONObject formData) throws Descriptor.FormException {
-            if (formData != null) {
-                ConnectionMode.flattenRadioBlock(
-                        formData,
-                        "portainerConnectionMode",
-                        "portainerUrl",
-                        "portainerCredentialsId");
+            JSONObject data = formData;
+            if (data == null) {
+                data = new JSONObject();
             }
-            return super.newInstance(req, formData);
+            ConnectionMode.flattenRadioBlock(
+                    data,
+                    "portainerConnectionMode",
+                    "portainerUrl",
+                    "portainerCredentialsId");
+            return super.newInstance(req, data);
         }
 
         public String getPortainerConnectionSummary() {

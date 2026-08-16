@@ -27,14 +27,14 @@ final class PortainerEnvMerge {
 
     /**
      * @param stepEnv       pairs from step text {@code env} (may be empty)
-     * @param vaultOverlay  flat map from Vault KV v2 (may be empty / null)
+     * @param vaultOverlay  flat map from Vault KV v2 (empty or null = no overlay)
      * @return merged list; Vault wins on collisions
      */
     static List<PortainerClient.EnvPair> merge(
             List<PortainerClient.EnvPair> stepEnv, Map<String, String> vaultOverlay) {
         LinkedHashMap<String, String> map = new LinkedHashMap<>();
         putAll(map, stepEnv);
-        if (vaultOverlay != null) {
+        if (vaultOverlay != null && !vaultOverlay.isEmpty()) {
             for (Map.Entry<String, String> e : vaultOverlay.entrySet()) {
                 if (e.getKey() == null || e.getKey().isBlank()) {
                     continue;

@@ -34,8 +34,9 @@ final class VaultClient implements AutoCloseable {
     private static final Logger LOGGER = Logger.getLogger(VaultClient.class.getName());
     private static final ObjectMapper MAPPER = new ObjectMapper();
     static final String DEFAULT_MOUNT = "secret";
+    private static final String REVOKE_SELF_PATH = "/v1/auth/token/revoke-self";
+    private static final String HTTP_STATUS_PREFIX = "HTTP ";
 
-    private final int connectTimeoutMs;
     private final int readTimeoutMs;
     private final PortainerBuildLogger buildLog;
     private final HttpClient http;
@@ -45,7 +46,6 @@ final class VaultClient implements AutoCloseable {
     }
 
     VaultClient(int connectTimeoutMs, int readTimeoutMs, PortainerBuildLogger buildLog) {
-        this.connectTimeoutMs = connectTimeoutMs;
         this.readTimeoutMs = readTimeoutMs;
         this.buildLog = buildLog;
         this.http = ProxyConfiguration.newHttpClientBuilder()
@@ -84,7 +84,7 @@ final class VaultClient implements AutoCloseable {
         String base = VaultUrl.normalizeBaseUrl(vaultUrl);
         String token = loginAppRole(base, roleId, secretId, namespace);
         try {
-            httpJson(
+            httpJson(new HttpJsonCall(
                     "GET",
                     base + "/v1/auth/token/lookup-self",
                     token,
@@ -92,7 +92,7 @@ final class VaultClient implements AutoCloseable {
                     null,
                     "Vault token lookup-self",
                     false,
-                    Set.of());
+                    Set.of()));
         } finally {
             revokeSelf(base, token, namespace);
         }
@@ -106,7 +106,7 @@ final class VaultClient implements AutoCloseable {
         String base = VaultUrl.normalizeBaseUrl(vaultUrl);
         JsonNode root;
         try {
-            root = httpJson(
+            root = httpJson(new HttpJsonCall(
                     "GET",
                     base + "/v1/sys/health",
                     null,
@@ -114,7 +114,7 @@ final class VaultClient implements AutoCloseable {
                     null,
                     "Vault health",
                     false,
-                    Set.of(429, 473));
+                    Set.of(429, 473)));
         } catch (IOException e) {
             throw mapHealthError(e);
         }
@@ -146,17 +146,17 @@ final class VaultClient implements AutoCloseable {
         }
         long startedNs = System.nanoTime();
         try {
-            httpJson(
+            httpJson(new HttpJsonCall(
                     "POST",
-                    base + "/v1/auth/token/revoke-self",
+                    base + REVOKE_SELF_PATH,
                     token,
                     namespace,
                     null,
                     "Vault token revoke-self",
-                    true);
+                    true));
             long durationMs = (System.nanoTime() - startedNs) / 1_000_000L;
             if (buildLog != null) {
-                buildLog.http("POST", "/v1/auth/token/revoke-self", durationMs);
+                buildLog.http("POST", REVOKE_SELF_PATH, durationMs);
             } else {
                 LOGGER.log(Level.FINE, "Vault token revoke-self succeeded");
             }
@@ -168,7 +168,7 @@ final class VaultClient implements AutoCloseable {
             }
             String softFail = softFailStatus(detail);
             if (buildLog != null) {
-                buildLog.http("POST", "/v1/auth/token/revoke-self", durationMs, "soft-fail: " + softFail);
+                buildLog.http("POST", REVOKE_SELF_PATH, durationMs, "soft-fail: " + softFail);
                 buildLog.warn("Vault revoke-self failed (token left for Vault TTL)");
             } else {
                 LOGGER.log(
@@ -186,7 +186,7 @@ final class VaultClient implements AutoCloseable {
         java.util.regex.Matcher m =
                 java.util.regex.Pattern.compile("HTTP\\s+(\\d{3})").matcher(detail);
         if (m.find()) {
-            return "HTTP " + m.group(1);
+            return HTTP_STATUS_PREFIX + m.group(1);
         }
         String truncated = detail.length() > 80 ? detail.substring(0, 80) + "…" : detail;
         return truncated.replaceAll("\\s+", " ").trim();
@@ -200,14 +200,14 @@ final class VaultClient implements AutoCloseable {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("role_id", roleId);
         body.put("secret_id", secretId);
-        JsonNode auth = httpJson(
+        JsonNode auth = httpJson(new HttpJsonCall(
                 "POST",
                 base + "/v1/auth/approle/login",
                 null,
                 namespace,
                 body,
                 "Vault AppRole login",
-                false);
+                false));
         String token = text(auth.path("auth"), "client_token");
         if (token.isBlank()) {
             throw new IOException("Vault AppRole login did not return a client token.");
@@ -219,17 +219,17 @@ final class VaultClient implements AutoCloseable {
             throws IOException {
         String mount = normalizeMount(request.mount);
         String path = normalizeSecretPath(request.path);
-        StringBuilder url = new StringBuilder(base)
-                .append("/v1/")
-                .append(encodePathSegments(mount))
-                .append("/data/")
-                .append(encodePathSegments(path));
-        if (request.version != null && request.version > 0) {
-            url.append("?version=").append(request.version);
-        }
-        JsonNode root;
+        JsonNode root = fetchKvV2(base, token, request.namespace, mount, path, request.version);
+        return flatSecretMap(requireKvV2SecretData(root));
+    }
+
+    private JsonNode fetchKvV2(
+            String base, String token, String namespace, String mount, String path, Integer version)
+            throws IOException {
+        String url = buildKvV2Url(base, mount, path, version);
         try {
-            root = httpJson("GET", url.toString(), token, request.namespace, null, "Vault KV v2 read", false);
+            return httpJson(new HttpJsonCall(
+                    "GET", url, token, namespace, null, "Vault KV v2 read", false));
         } catch (IOException e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
             if (msg.contains("404")) {
@@ -241,6 +241,21 @@ final class VaultClient implements AutoCloseable {
             }
             throw e;
         }
+    }
+
+    private static String buildKvV2Url(String base, String mount, String path, Integer version) {
+        StringBuilder url = new StringBuilder(base)
+                .append("/v1/")
+                .append(encodePathSegments(mount))
+                .append("/data/")
+                .append(encodePathSegments(path));
+        if (version != null && version > 0) {
+            url.append("?version=").append(version);
+        }
+        return url.toString();
+    }
+
+    private static JsonNode requireKvV2SecretData(JsonNode root) throws IOException {
         JsonNode dataWrapper = root.path("data");
         if (dataWrapper.isMissingNode() || dataWrapper.isNull()) {
             throw new IOException(
@@ -251,26 +266,33 @@ final class VaultClient implements AutoCloseable {
             throw new IOException(
                     "Vault response is not KV v2 secret data (expected data.data object); only KV v2 is supported.");
         }
+        return secretData;
+    }
+
+    private static Map<String, String> flatSecretMap(JsonNode secretData) throws IOException {
         Map<String, String> out = new LinkedHashMap<>();
         var fields = secretData.fields();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> entry = fields.next();
-            String key = entry.getKey();
-            if (key == null || key.isBlank()) {
-                continue;
-            }
-            JsonNode v = entry.getValue();
-            if (v == null || v.isNull()) {
-                out.put(key, "");
-                continue;
-            }
-            if (v.isObject() || v.isArray()) {
-                throw new IOException(
-                        "Vault secret key '" + key + "' is not a flat string value (nested JSON not supported).");
-            }
-            out.put(key, v.asText(""));
+            putFlatSecretEntry(out, entry.getKey(), entry.getValue());
         }
         return out;
+    }
+
+    private static void putFlatSecretEntry(Map<String, String> out, String key, JsonNode value)
+            throws IOException {
+        if (key == null || key.isBlank()) {
+            return;
+        }
+        if (value == null || value.isNull()) {
+            out.put(key, "");
+            return;
+        }
+        if (value.isObject() || value.isArray()) {
+            throw new IOException(
+                    "Vault secret key '" + key + "' is not a flat string value (nested JSON not supported).");
+        }
+        out.put(key, value.asText(""));
     }
 
     /**
@@ -280,7 +302,7 @@ final class VaultClient implements AutoCloseable {
         if (mount == null || mount.isBlank()) {
             return DEFAULT_MOUNT;
         }
-        String m = mount.trim().replaceAll("^/+|/+$", "");
+        String m = stripSurroundingSlashes(mount.trim());
         if (m.isEmpty() || m.contains("/")) {
             throw new IllegalArgumentException(
                     "Vault mount must be a single path segment (e.g. secret), got '" + truncate(mount.trim(), 40) + "'.");
@@ -295,13 +317,13 @@ final class VaultClient implements AutoCloseable {
         if (path == null || path.isBlank()) {
             throw new IllegalArgumentException("Vault path is required (e.g. myapp/prod).");
         }
-        String p = path.trim().replaceAll("^/+|/+$", "");
+        String p = stripSurroundingSlashes(path.trim());
         if (p.isEmpty()) {
             throw new IllegalArgumentException("Vault path is required (e.g. myapp/prod).");
         }
         // Accept UI-style "secret/data/myapp/prod" when mount is separate — strip leading data/
         if (p.startsWith("data/")) {
-            p = p.substring("data/".length()).replaceAll("^/+", "");
+            p = stripLeadingSlashes(p.substring("data/".length()));
         }
         if (p.isEmpty()) {
             throw new IllegalArgumentException("Vault path is required (e.g. myapp/prod).");
@@ -327,98 +349,144 @@ final class VaultClient implements AutoCloseable {
         }
     }
 
-    private JsonNode httpJson(
-            String method,
-            String apiUrl,
-            String vaultToken,
-            String namespace,
-            JsonNode body,
-            String opLabel,
-            boolean skipBuildHttpLog) throws IOException {
-        return httpJson(method, apiUrl, vaultToken, namespace, body, opLabel, skipBuildHttpLog, Set.of());
+    /** Strip leading and trailing {@code /} without regex backtracking. */
+    static String stripSurroundingSlashes(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        int start = 0;
+        int end = value.length();
+        while (start < end && value.charAt(start) == '/') {
+            start++;
+        }
+        while (end > start && value.charAt(end - 1) == '/') {
+            end--;
+        }
+        return start == 0 && end == value.length() ? value : value.substring(start, end);
     }
 
-    private JsonNode httpJson(
-            String method,
-            String apiUrl,
-            String vaultToken,
-            String namespace,
-            JsonNode body,
-            String opLabel,
-            boolean skipBuildHttpLog,
-            Set<Integer> extraSuccessCodes) throws IOException {
-        final URI uri;
+    /** Strip leading {@code /} without regex. */
+    static String stripLeadingSlashes(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        int start = 0;
+        while (start < value.length() && value.charAt(start) == '/') {
+            start++;
+        }
+        return start == 0 ? value : value.substring(start);
+    }
+
+    /** Strip trailing {@code /} without regex. */
+    static String stripTrailingSlashes(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        int end = value.length();
+        while (end > 0 && value.charAt(end - 1) == '/') {
+            end--;
+        }
+        return end == value.length() ? value : value.substring(0, end);
+    }
+
+    private JsonNode httpJson(HttpJsonCall call) throws IOException {
+        URI uri = createApiUri(call.apiUrl);
+        assertRequestHostsAllowed(call.apiUrl, uri);
+
+        String method = call.method == null ? "GET" : call.method.toUpperCase(Locale.ROOT);
+        HttpRequest request = buildHttpRequest(uri, call, method);
+
+        long startedNs = System.nanoTime();
+        HttpResponse<byte[]> response = sendHttp(request, uri, call.opLabel);
+        long durationMs = (System.nanoTime() - startedNs) / 1_000_000L;
+        String path = PortainerBuildLogger.safeRequestPath(uri);
+
+        assertResponseHostAllowed(response);
+        return readHttpJsonBody(call, method, path, durationMs, response);
+    }
+
+    private static URI createApiUri(String apiUrl) throws IOException {
         try {
-            uri = URI.create(apiUrl);
+            return URI.create(apiUrl);
         } catch (IllegalArgumentException e) {
             throw new IOException("invalid Vault API URL", e);
         }
+    }
+
+    private static void assertRequestHostsAllowed(String apiUrl, URI uri) throws IOException {
         try {
             ConnectionTester.assertHostAllowed(apiUrl, ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
             ConnectionTester.assertUriHostAllowed(uri);
         } catch (IllegalArgumentException e) {
             throw new IOException(e.getMessage(), e);
         }
+    }
 
+    private HttpRequest buildHttpRequest(URI uri, HttpJsonCall call, String method) throws IOException {
         HttpRequest.Builder req = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofMillis(Math.max(1, readTimeoutMs)))
                 .header("Accept", "application/json");
-        if (vaultToken != null && !vaultToken.isBlank()) {
-            req.header("X-Vault-Token", vaultToken);
+        if (call.vaultToken != null && !call.vaultToken.isBlank()) {
+            req.header("X-Vault-Token", call.vaultToken);
         }
-        if (namespace != null && !namespace.isBlank()) {
-            req.header("X-Vault-Namespace", namespace.trim());
+        if (call.namespace != null && !call.namespace.isBlank()) {
+            req.header("X-Vault-Namespace", call.namespace.trim());
         }
-
-        String m = method == null ? "GET" : method.toUpperCase(Locale.ROOT);
-        if ("GET".equals(m) || "DELETE".equals(m)) {
-            req.method(m, HttpRequest.BodyPublishers.noBody());
+        if ("GET".equals(method) || "DELETE".equals(method)) {
+            req.method(method, HttpRequest.BodyPublishers.noBody());
         } else {
             req.header("Content-Type", "application/json");
-            byte[] bytes = body == null ? "{}".getBytes(StandardCharsets.UTF_8) : MAPPER.writeValueAsBytes(body);
-            req.method(m, HttpRequest.BodyPublishers.ofByteArray(bytes));
+            byte[] bytes =
+                    call.body == null ? "{}".getBytes(StandardCharsets.UTF_8) : MAPPER.writeValueAsBytes(call.body);
+            req.method(method, HttpRequest.BodyPublishers.ofByteArray(bytes));
         }
+        return req.build();
+    }
 
-        long startedNs = System.nanoTime();
-        final HttpResponse<byte[]> response;
+    private HttpResponse<byte[]> sendHttp(HttpRequest request, URI uri, String opLabel) throws IOException {
         try {
-            response = http.send(req.build(), HttpResponse.BodyHandlers.ofByteArray());
+            return http.send(request, HttpResponse.BodyHandlers.ofByteArray());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException(opLabel + " interrupted", e);
         } catch (IOException e) {
             throw mapTransportError(uri, e, opLabel);
         }
+    }
 
-        long durationMs = (System.nanoTime() - startedNs) / 1_000_000L;
-        String path = PortainerBuildLogger.safeRequestPath(uri);
-
+    private static void assertResponseHostAllowed(HttpResponse<?> response) throws IOException {
         try {
             ConnectionTester.assertUriHostAllowed(response.uri());
         } catch (IllegalArgumentException e) {
             throw new IOException(e.getMessage(), e);
         }
+    }
 
+    private JsonNode readHttpJsonBody(
+            HttpJsonCall call, String method, String path, long durationMs, HttpResponse<byte[]> response)
+            throws IOException {
         int code = response.statusCode();
         byte[] bytes = response.body() == null ? new byte[0] : response.body();
-        Set<Integer> extra = extraSuccessCodes == null ? Set.of() : extraSuccessCodes;
+        Set<Integer> extra = call.extraSuccessCodes == null ? Set.of() : call.extraSuccessCodes;
         boolean ok = (code >= 200 && code < 300) || extra.contains(code);
         if (!ok) {
-            if (!skipBuildHttpLog && buildLog != null) {
-                buildLog.http(m, path, durationMs);
-            }
-            throw httpError(code, bytes, opLabel);
+            logHttpIfNeeded(call, method, path, durationMs);
+            throw httpError(code, bytes, call.opLabel);
         }
-        if (!skipBuildHttpLog && buildLog != null) {
-            buildLog.http(m, path, durationMs);
-        }
+        logHttpIfNeeded(call, method, path, durationMs);
         if (bytes.length == 0) {
             return MAPPER.createObjectNode();
         }
         try {
             return MAPPER.readTree(bytes);
         } catch (IOException e) {
-            throw new IOException(opLabel + " returned non-JSON response.", e);
+            throw new IOException(call.opLabel + " returned non-JSON response.", e);
+        }
+    }
+
+    private void logHttpIfNeeded(HttpJsonCall call, String method, String path, long durationMs) {
+        if (!call.skipBuildHttpLog && buildLog != null) {
+            buildLog.http(method, path, durationMs);
         }
     }
 
@@ -428,12 +496,18 @@ final class VaultClient implements AutoCloseable {
         String suffix = detail.isBlank() ? "" : " - " + detail;
         if (code == 401 || code == 403) {
             return new IOException(
-                    "HTTP " + code + " - Vault authentication or permission denied (" + label + ")" + suffix);
+                    HTTP_STATUS_PREFIX
+                            + code
+                            + " - Vault authentication or permission denied ("
+                            + label
+                            + ")"
+                            + suffix);
         }
         if (code == 404) {
-            return new IOException("HTTP 404 - Vault path or secret not found (" + label + ")" + suffix);
+            return new IOException(
+                    HTTP_STATUS_PREFIX + "404 - Vault path or secret not found (" + label + ")" + suffix);
         }
-        return new IOException("HTTP " + code + " - " + label + " failed" + suffix);
+        return new IOException(HTTP_STATUS_PREFIX + code + " - " + label + " failed" + suffix);
     }
 
     /**
@@ -448,34 +522,40 @@ final class VaultClient implements AutoCloseable {
             return "";
         }
         try {
-            JsonNode node = MAPPER.readTree(raw);
-            JsonNode errors = node.get("errors");
-            if (errors != null && errors.isArray() && errors.size() > 0) {
-                StringBuilder sb = new StringBuilder();
-                for (JsonNode e : errors) {
-                    String t = e.asText("").trim();
-                    if (t.isEmpty()) {
-                        continue;
-                    }
-                    if (looksLikeSecret(t)) {
-                        continue;
-                    }
-                    if (sb.length() > 0) {
-                        sb.append("; ");
-                    }
-                    sb.append(t);
-                }
-                return truncate(sb.toString(), 200);
-            }
-            String msg = firstNonBlank(text(node, "message"), text(node, "error"));
-            if (!msg.isBlank() && !looksLikeSecret(msg)) {
-                return truncate(msg, 200);
-            }
+            return extractErrorsFromJson(MAPPER.readTree(raw));
         } catch (IOException ignored) {
-            // fall through
+            return "";
         }
-        // Avoid dumping raw bodies that might include echoed material
+    }
+
+    private static String extractErrorsFromJson(JsonNode node) {
+        String fromArray = joinErrorArray(node.get("errors"));
+        if (!fromArray.isBlank()) {
+            return truncate(fromArray, 200);
+        }
+        String msg = firstNonBlank(text(node, "message"), text(node, "error"));
+        if (!msg.isBlank() && !looksLikeSecret(msg)) {
+            return truncate(msg, 200);
+        }
         return "";
+    }
+
+    private static String joinErrorArray(JsonNode errors) {
+        if (errors == null || !errors.isArray() || errors.size() == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode e : errors) {
+            String t = e.asText("").trim();
+            if (t.isEmpty() || looksLikeSecret(t)) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append("; ");
+            }
+            sb.append(t);
+        }
+        return sb.toString();
     }
 
     private static boolean looksLikeSecret(String text) {
@@ -493,26 +573,49 @@ final class VaultClient implements AutoCloseable {
         if (e instanceof HttpTimeoutException) {
             return new IOException(opLabel + " timed out. Check Vault URL, network, and timeouts.", e);
         }
-        Throwable t = e;
-        while (t != null) {
-            if (t instanceof UnknownHostException) {
-                String host = uri == null ? null : uri.getHost();
-                return new IOException(
-                        "Vault host could not be resolved"
-                                + (host == null || host.isBlank() ? "." : ": " + host + "."),
-                        e);
-            }
-            if (t instanceof ConnectException) {
-                return new IOException(
-                        "Cannot connect to Vault"
-                                + (uri == null || uri.getHost() == null ? "" : " at " + uri.getHost())
-                                + " (network/connectivity).",
-                        e);
-            }
-            t = t.getCause();
+        IOException fromCause = mapTransportCauseChain(uri, e);
+        if (fromCause != null) {
+            return fromCause;
         }
         LOGGER.log(Level.FINE, "{0} transport error: {1}", new Object[]{opLabel, e.toString()});
         return new IOException(opLabel + " failed (network/connectivity).", e);
+    }
+
+    private static IOException mapTransportCauseChain(URI uri, IOException root) {
+        Throwable t = root;
+        while (t != null) {
+            IOException mapped = mapTransportCause(uri, t, root);
+            if (mapped != null) {
+                return mapped;
+            }
+            t = t.getCause();
+        }
+        return null;
+    }
+
+    private static IOException mapTransportCause(URI uri, Throwable t, IOException root) {
+        if (t instanceof UnknownHostException) {
+            return new IOException(unknownHostMessage(uri), root);
+        }
+        if (t instanceof ConnectException) {
+            return new IOException(connectMessage(uri), root);
+        }
+        return null;
+    }
+
+    private static String unknownHostMessage(URI uri) {
+        String host = uri == null ? null : uri.getHost();
+        if (host == null || host.isBlank()) {
+            return "Vault host could not be resolved.";
+        }
+        return "Vault host could not be resolved: " + host + ".";
+    }
+
+    private static String connectMessage(URI uri) {
+        if (uri == null || uri.getHost() == null) {
+            return "Cannot connect to Vault (network/connectivity).";
+        }
+        return "Cannot connect to Vault at " + uri.getHost() + " (network/connectivity).";
     }
 
     private static String encodePathSegments(String path) {
@@ -573,6 +676,47 @@ final class VaultClient implements AutoCloseable {
             return s;
         }
         return s.substring(0, max) + "…";
+    }
+
+    private static final class HttpJsonCall {
+        final String method;
+        final String apiUrl;
+        final String vaultToken;
+        final String namespace;
+        final JsonNode body;
+        final String opLabel;
+        final boolean skipBuildHttpLog;
+        final Set<Integer> extraSuccessCodes;
+
+        HttpJsonCall(
+                String method,
+                String apiUrl,
+                String vaultToken,
+                String namespace,
+                JsonNode body,
+                String opLabel,
+                boolean skipBuildHttpLog) {
+            this(method, apiUrl, vaultToken, namespace, body, opLabel, skipBuildHttpLog, Set.of());
+        }
+
+        HttpJsonCall(
+                String method,
+                String apiUrl,
+                String vaultToken,
+                String namespace,
+                JsonNode body,
+                String opLabel,
+                boolean skipBuildHttpLog,
+                Set<Integer> extraSuccessCodes) {
+            this.method = method;
+            this.apiUrl = apiUrl;
+            this.vaultToken = vaultToken;
+            this.namespace = namespace;
+            this.body = body;
+            this.opLabel = opLabel;
+            this.skipBuildHttpLog = skipBuildHttpLog;
+            this.extraSuccessCodes = extraSuccessCodes;
+        }
     }
 
     static final class ReadRequest {
