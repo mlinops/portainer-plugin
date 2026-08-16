@@ -29,10 +29,10 @@ final class StackSource {
             return defaultMode;
         }
         String v = raw.trim();
-        if (v.startsWith("{") && v.contains("value")) {
+        if (v.startsWith("{") && v.contains(ConnectionMode.RADIO_VALUE)) {
             try {
                 JSONObject o = JSONObject.fromObject(v);
-                Object mode = o.opt("value");
+                Object mode = o.opt(ConnectionMode.RADIO_VALUE);
                 if (mode != null && !JSONNull.getInstance().equals(mode)) {
                     v = String.valueOf(mode).trim();
                 }

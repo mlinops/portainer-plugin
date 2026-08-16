@@ -35,6 +35,15 @@ final class ConnectionTester {
         if (baseUrl == null || baseUrl.isBlank()) {
             throw new IllegalArgumentException("URL host is missing.");
         }
+        String uriHost = tryUriHost(baseUrl);
+        if (uriHost != null) {
+            return uriHost;
+        }
+        return hostFromAuthority(stripUserInfoAndPath(authorityAfterScheme(baseUrl.trim())));
+    }
+
+    /** Prefer {@link URI#getHost()}; {@code null} if URI parse fails or host is empty. */
+    private static String tryUriHost(String baseUrl) {
         try {
             String host = URI.create(baseUrl).getHost();
             if (host != null && !host.isBlank()) {
@@ -43,12 +52,18 @@ final class ConnectionTester {
         } catch (IllegalArgumentException ignored) {
             // URI.create wraps URISyntaxException; fall through to manual authority parse
         }
-        String s = baseUrl.trim();
+        return null;
+    }
+
+    private static String authorityAfterScheme(String s) {
         int scheme = s.indexOf("://");
         if (scheme < 0) {
             throw new IllegalArgumentException("URL host is invalid.");
         }
-        String authority = s.substring(scheme + 3);
+        return s.substring(scheme + 3);
+    }
+
+    private static String stripUserInfoAndPath(String authority) {
         int slash = authority.indexOf('/');
         if (slash >= 0) {
             authority = authority.substring(0, slash);
@@ -57,23 +72,27 @@ final class ConnectionTester {
         if (at >= 0) {
             authority = authority.substring(at + 1);
         }
+        return authority;
+    }
+
+    private static String hostFromAuthority(String authority) {
         if (authority.startsWith("[")) {
             int end = authority.indexOf(']');
             if (end < 0) {
                 throw new IllegalArgumentException("URL host is invalid.");
             }
-            String host = authority.substring(1, end);
-            if (host.isBlank()) {
-                throw new IllegalArgumentException("URL host is missing.");
-            }
-            return stripIpv6Brackets(host);
+            return requireHost(authority.substring(1, end), false);
         }
         int colon = authority.lastIndexOf(':');
         String host = colon > 0 ? authority.substring(0, colon) : authority;
-        if (host.isBlank()) {
+        return requireHost(host, true);
+    }
+
+    private static String requireHost(String host, boolean rejectWhitespace) {
+        if (host == null || host.isBlank()) {
             throw new IllegalArgumentException("URL host is missing.");
         }
-        if (host.indexOf(' ') >= 0 || host.indexOf('\\') >= 0) {
+        if (rejectWhitespace && (host.indexOf(' ') >= 0 || host.indexOf('\\') >= 0)) {
             throw new IllegalArgumentException("URL host is invalid.");
         }
         return stripIpv6Brackets(host);

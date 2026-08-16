@@ -23,6 +23,8 @@ final class ConnectionMode {
     static final String MANUAL = "manual";
     /** Vault only: disable overlay (no Vault HTTP / Plugin calls). */
     static final String NONE = "none";
+    /** Selected option key in Freestyle {@code f:radioBlock} JSON. */
+    static final String RADIO_VALUE = "value";
 
     private ConnectionMode() {
     }
@@ -33,10 +35,10 @@ final class ConnectionMode {
         }
         String v = raw.trim();
         // Form validation / odd clients may pass radioBlock JSON as a string.
-        if (v.startsWith("{") && v.contains("value")) {
+        if (v.startsWith("{") && v.contains(RADIO_VALUE)) {
             try {
                 JSONObject o = JSONObject.fromObject(v);
-                Object mode = o.opt("value");
+                Object mode = o.opt(RADIO_VALUE);
                 if (mode != null && !JSONNull.getInstance().equals(mode)) {
                     v = String.valueOf(mode).trim();
                 }
@@ -104,7 +106,7 @@ final class ConnectionMode {
         java.util.function.BiFunction<String, String, String> norm =
                 normalizer == null ? ConnectionMode::normalize : normalizer;
         String fallback = defaultMode == null || defaultMode.isBlank() ? INHERIT : defaultMode;
-        formData.put(modeKey, norm.apply(stringFromJson(block, "value"), fallback));
+        formData.put(modeKey, norm.apply(stringFromJson(block, RADIO_VALUE), fallback));
         if (nestedFields == null) {
             return;
         }

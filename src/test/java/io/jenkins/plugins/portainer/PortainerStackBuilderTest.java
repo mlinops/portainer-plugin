@@ -646,7 +646,12 @@ public class PortainerStackBuilderTest {
                 + "  )\n"
                 + "}\n";
         job.setDefinition(new CpsFlowDefinition(script, true));
-        jenkins.buildAndAssertStatus(Result.FAILURE, job);
+        WorkflowRun run = jenkins.buildAndAssertStatus(Result.FAILURE, job);
+        jenkins.assertLogContains("action", run);
+        jenkins.assertLogContains("instanceId", run);
+        assertFalse(
+                isStackMutateApi(lastPath.get(), lastMethod.get()),
+                "legacy params must not reach stack mutate APIs; lastPath=" + lastPath.get());
     }
 
     @Test
