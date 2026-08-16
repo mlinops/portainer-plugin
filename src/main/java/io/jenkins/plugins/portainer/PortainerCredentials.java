@@ -70,14 +70,14 @@ final class PortainerCredentials {
                     "Vault AppRole credentials '" + credentialsId
                             + "' type is not supported (use Username/Password).");
         }
-        String roleId = up.getUsername() == null ? "" : up.getUsername();
-        String secretId = up.getPassword() == null ? "" : up.getPassword().getPlainText();
+        String roleId = up.getUsername();
+        String secretId = up.getPassword().getPlainText();
         if (roleId.isBlank()) {
             throw new IllegalStateException(
                     "Vault AppRole credentials '" + credentialsId
                             + "' has an empty username (expected role_id).");
         }
-        if (secretId == null || secretId.isBlank()) {
+        if (secretId.isBlank()) {
             throw new IllegalStateException(
                     "Vault AppRole credentials '" + credentialsId
                             + "' has an empty password (expected secret_id).");
@@ -97,9 +97,9 @@ final class PortainerCredentials {
         }
         Credentials creds = findGitCredential(credentialsId, item);
         if (creds instanceof StandardUsernamePasswordCredentials up) {
-            String user = up.getUsername() == null ? "" : up.getUsername();
-            String pass = up.getPassword() == null ? "" : up.getPassword().getPlainText();
-            if (pass == null || pass.isBlank()) {
+            String user = up.getUsername();
+            String pass = up.getPassword().getPlainText();
+            if (pass.isBlank()) {
                 throw new IllegalStateException("Git credentials '" + credentialsId + "' has an empty password.");
             }
             return new GitAuth(user, pass);
