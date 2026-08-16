@@ -19,6 +19,7 @@ import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -196,6 +197,181 @@ public class PortainerCredentialsTest {
         ListBoxModel model = PortainerCredentials.fillVaultAppRoleCredentials(null, null);
         assertTrue(containsValue(model, "approle-ok"));
         assertFalse(containsValue(model, "secret-text-skip"));
+    }
+
+    @Test
+    public void resolveAppRole_emptyPassword_failsWithoutLeaking(JenkinsRule jenkins) throws Exception {
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new UsernamePasswordCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "vault-empty-pass",
+                        "AppRole",
+                        "role-id-VALUE",
+                        ""));
+        SystemCredentialsProvider.getInstance().save();
+
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> PortainerCredentials.resolveAppRole("vault-empty-pass", null));
+        assertTrue(ex.getMessage().contains("empty password"));
+        assertTrue(!ex.getMessage().contains("role-id-VALUE"));
+    }
+
+    @Test
+    public void resolveApiKey_blankId(JenkinsRule jenkins) {
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> PortainerCredentials.resolveApiKey(" ", null));
+        assertTrue(ex.getMessage().contains("Credentials ID is required"));
+    }
+
+    @Test
+    public void resolveSecretText_emptySecret(JenkinsRule jenkins) throws Exception {
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new StringCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "empty-secret",
+                        "API key",
+                        Secret.fromString("")));
+        SystemCredentialsProvider.getInstance().save();
+
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> PortainerCredentials.resolveSecretText("empty-secret", null, "Portainer API key"));
+        assertTrue(ex.getMessage().contains("empty secret"));
+    }
+
+    @Test
+    public void resolveSecretText_rejectsUsernamePassword(JenkinsRule jenkins) throws Exception {
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new UsernamePasswordCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "not-secret-text",
+                        "up",
+                        "u",
+                        "p"));
+        SystemCredentialsProvider.getInstance().save();
+
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> PortainerCredentials.resolveSecretText("not-secret-text", null, "x"));
+        assertTrue(ex.getMessage().contains("not found") || ex.getMessage().contains("expected type"));
+    }
+
+    @Test
+    public void resolveGitAuth_blankReturnsNull(JenkinsRule jenkins) {
+        assertNull(PortainerCredentials.resolveGitAuth(null, null));
+        assertNull(PortainerCredentials.resolveGitAuth("  ", null));
+    }
+
+    @Test
+    public void resolveGitAuth_usernamePassword(JenkinsRule jenkins) throws Exception {
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new UsernamePasswordCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "git-up",
+                        "git",
+                        "clone-user",
+                        "clone-pass"));
+        SystemCredentialsProvider.getInstance().save();
+
+        PortainerCredentials.GitAuth auth = PortainerCredentials.resolveGitAuth("git-up", null);
+        assertEquals("clone-user", auth.username);
+        assertEquals("clone-pass", auth.password);
+    }
+
+    @Test
+    public void resolveGitAuth_secretTextAsOauth2(JenkinsRule jenkins) throws Exception {
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new StringCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "git-pat",
+                        "PAT",
+                        Secret.fromString("glpat-TOKEN")));
+        SystemCredentialsProvider.getInstance().save();
+
+        PortainerCredentials.GitAuth auth = PortainerCredentials.resolveGitAuth("git-pat", null);
+        assertEquals("oauth2", auth.username);
+        assertEquals("glpat-TOKEN", auth.password);
+    }
+
+    @Test
+    public void resolveGitAuth_emptyPassword(JenkinsRule jenkins) throws Exception {
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new UsernamePasswordCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "git-empty-pass",
+                        "git",
+                        "u",
+                        ""));
+        SystemCredentialsProvider.getInstance().save();
+
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> PortainerCredentials.resolveGitAuth("git-empty-pass", null));
+        assertTrue(ex.getMessage().contains("empty password"));
+    }
+
+    @Test
+    public void resolveGitAuth_emptySecretText(JenkinsRule jenkins) throws Exception {
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new StringCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "git-empty-secret",
+                        "PAT",
+                        Secret.fromString("")));
+        SystemCredentialsProvider.getInstance().save();
+
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> PortainerCredentials.resolveGitAuth("git-empty-secret", null));
+        assertTrue(ex.getMessage().contains("empty secret"));
+    }
+
+    @Test
+    public void resolveGitAuth_missingCredential(JenkinsRule jenkins) {
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> PortainerCredentials.resolveGitAuth("no-such-git-cred", null));
+        assertTrue(ex.getMessage().contains("not found"));
+    }
+
+    @Test
+    public void fillSecretOrUsernamePassword_listsBoth(JenkinsRule jenkins) throws Exception {
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new UsernamePasswordCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "git-up-listed",
+                        "git",
+                        "u",
+                        "p"));
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new StringCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "git-pat-listed",
+                        "PAT",
+                        Secret.fromString("tok")));
+        SystemCredentialsProvider.getInstance().save();
+
+        ListBoxModel model = PortainerCredentials.fillSecretOrUsernamePassword(null, null);
+        assertTrue(containsValue(model, "git-up-listed"));
+        assertTrue(containsValue(model, "git-pat-listed"));
+    }
+
+    @Test
+    public void fillSecretText_withConfigure_listsCredentials(JenkinsRule jenkins) throws Exception {
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        SystemCredentialsProvider.getInstance().getCredentials().add(
+                new StringCredentialsImpl(
+                        CredentialsScope.GLOBAL,
+                        "api-job-visible",
+                        "API key",
+                        Secret.fromString("secret")));
+        SystemCredentialsProvider.getInstance().save();
+
+        ListBoxModel model = PortainerCredentials.fillSecretText(project, "api-job-visible");
+        assertTrue(containsValue(model, "api-job-visible"));
+        assertTrue(containsValue(model, ""));
     }
 
     private static boolean containsValue(ListBoxModel model, String value) {
