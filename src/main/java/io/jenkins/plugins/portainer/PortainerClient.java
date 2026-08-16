@@ -52,7 +52,6 @@ final class PortainerClient implements AutoCloseable {
     private static final String JSON_REPOSITORY_USERNAME = "RepositoryUsername";
     private static final String JSON_REPOSITORY_PASSWORD = "RepositoryPassword";
 
-    private final int connectTimeoutMs;
     private final int readTimeoutMs;
     private final PortainerBuildLogger buildLog;
     private final HttpClient http;
@@ -62,7 +61,6 @@ final class PortainerClient implements AutoCloseable {
     }
 
     PortainerClient(int connectTimeoutMs, int readTimeoutMs, PortainerBuildLogger buildLog) {
-        this.connectTimeoutMs = connectTimeoutMs;
         this.readTimeoutMs = readTimeoutMs;
         this.buildLog = buildLog;
         this.http = ProxyConfiguration.newHttpClientBuilder()
@@ -99,7 +97,7 @@ final class PortainerClient implements AutoCloseable {
         if (isAuthFailureMessage(msg) || isConnectivityMessage(msg)) {
             throw statusEx;
         }
-        LOGGER.log(Level.FINE, "GET /api/status failed, trying /api/endpoints: {0}", statusEx.toString());
+        LOGGER.log(Level.FINE, "GET /api/status failed, trying /api/endpoints", statusEx);
         httpJson("GET", base + "/api/endpoints", apiKey, null, null);
         return new ProbeDetails("Portainer endpoints reachable");
     }
@@ -142,17 +140,7 @@ final class PortainerClient implements AutoCloseable {
     }
 
     /** Result of {@link #probeAccess}: primary UI label only (no environment count). */
-    static final class ProbeDetails {
-        private final String primaryLabel;
-
-        ProbeDetails(String primaryLabel) {
-            this.primaryLabel = primaryLabel;
-        }
-
-        String primaryLabel() {
-            return primaryLabel;
-        }
-    }
+    record ProbeDetails(String primaryLabel) {}
 
     /**
      * {@code GET /api/endpoints/{endpointId}} — verifies the environment exists and is readable.
@@ -710,12 +698,8 @@ final class PortainerClient implements AutoCloseable {
                 baseUrl,
                 apiKey,
                 endpointId,
-                "config",
-                "configs",
-                "create config",
-                request.name,
-                request.data,
-                request.labels);
+                new DockerNamedResourceCreate(
+                        "config", "configs", "create config", request.name, request.data, request.labels));
     }
 
     /**
@@ -770,39 +754,36 @@ final class PortainerClient implements AutoCloseable {
                 baseUrl,
                 apiKey,
                 endpointId,
-                "secret",
-                "secrets",
-                "create secret",
-                request.name,
-                request.data,
-                request.labels);
+                new DockerNamedResourceCreate(
+                        "secret", "secrets", "create secret", request.name, request.data, request.labels));
     }
 
-    private JsonNode createDockerNamedResource(
-            String baseUrl,
-            String apiKey,
-            int endpointId,
+    /** Docker Swarm config/secret create payload for the Portainer proxy. */
+    private record DockerNamedResourceCreate(
             String kind,
             String dockerPathSegment,
             String debugNote,
             String name,
             byte[] data,
-            Map<String, String> labels)
+            Map<String, String> labels) {}
+
+    private JsonNode createDockerNamedResource(
+            String baseUrl, String apiKey, int endpointId, DockerNamedResourceCreate create)
             throws IOException {
-        if (name == null || name.isBlank()) {
-            throw new IOException("Docker " + kind + " name is required.");
+        if (create.name() == null || create.name().isBlank()) {
+            throw new IOException("Docker " + create.kind() + " name is required.");
         }
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        ObjectNode body = dockerNamedResourceBody(name.trim(), data, labels);
+        ObjectNode body = dockerNamedResourceBody(create.name().trim(), create.data(), create.labels());
         try {
             return httpJson(
                     "POST",
-                    base + API_ENDPOINTS + endpointId + "/docker/" + dockerPathSegment + "/create",
+                    base + API_ENDPOINTS + endpointId + "/docker/" + create.dockerPathSegment() + "/create",
                     apiKey,
                     body,
-                    debugNote);
+                    create.debugNote());
         } catch (IOException e) {
-            throw mapDockerNamedResourceCreateError(e, kind, name);
+            throw mapDockerNamedResourceCreateError(e, create.kind(), create.name());
         }
     }
 
@@ -1375,10 +1356,10 @@ final class PortainerClient implements AutoCloseable {
             return "";
         }
         // Avoid doubling when callers wrap httpError() which already appended a hint.
-        if (detail != null && detail.contains("Hint:")) {
+        if (detail.contains("Hint:")) {
             return "";
         }
-        String d = detail == null ? "" : detail.toLowerCase(Locale.ROOT);
+        String d = detail.toLowerCase(Locale.ROOT);
         // Portainer Helm/kube client hardcodes https://localhost:<https-bind>/api/endpoints/.../kubernetes
         // Custom certs for *.domain without SAN localhost fail hostname verification.
         if (d.contains("localhost")
@@ -1465,7 +1446,7 @@ final class PortainerClient implements AutoCloseable {
             return "";
         }
         java.util.regex.Matcher m = java.util.regex.Pattern.compile(
-                        "Get \"([^\"]+)\":\\s*([^\\n]+?)(?=(?:\\s+Get \")|$)",
+                        "Get \"([^\"]+)\":\\s*((?:(?!\\s+Get \")[^\\n])+)",
                         java.util.regex.Pattern.CASE_INSENSITIVE)
                 .matcher(detail);
         String last = "";

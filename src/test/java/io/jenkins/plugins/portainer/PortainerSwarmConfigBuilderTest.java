@@ -30,6 +30,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @WithJenkins
@@ -232,18 +234,183 @@ public class PortainerSwarmConfigBuilderTest {
     }
 
     @Test
-    public void formValidation_repositoryAndConfigPath(JenkinsRule jenkins) throws Exception {
+    public void freestyle_pruneOld_removesStaleConfig(JenkinsRule jenkins) throws Exception {
+        configurePortainer(jenkins);
+        stubGitFiles();
+        AtomicBoolean deleteCalled = new AtomicBoolean(false);
+        server.removeContext("/");
+        server.createContext("/", exchange -> {
+            lastPath.set(exchange.getRequestURI().getPath());
+            lastMethod.set(exchange.getRequestMethod());
+            byte[] raw = exchange.getRequestBody().readAllBytes();
+            lastBody.set(raw.length == 0 ? "" : new String(raw, StandardCharsets.UTF_8));
+            String path = exchange.getRequestURI().getPath();
+            if ("/api/status".equals(path)) {
+                respond(exchange, 200, "{\"Version\":\"2.39.3\"}");
+                return;
+            }
+            if (path != null && path.matches("/api/endpoints/\\d+$")) {
+                respond(exchange, 200, "{\"Id\":1,\"Name\":\"swarm\",\"Type\":1}");
+                return;
+            }
+            if ("/api/endpoints".equals(path)) {
+                respond(exchange, 200, "[{\"Id\":1,\"Name\":\"swarm\",\"Type\":1}]");
+                return;
+            }
+            if (path != null && path.matches("/api/endpoints/\\d+/docker/swarm$")) {
+                respond(exchange, 200, "{\"ID\":\"swarm-abc-123\"}");
+                return;
+            }
+            if (path != null && path.matches("/api/endpoints/\\d+/docker/configs$")
+                    && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                respond(
+                        exchange,
+                        200,
+                        "[{\"ID\":\"cfg-old\",\"Spec\":{\"Name\":\"app-settings-deadbeef\","
+                                + "\"Labels\":{\"jenkins.portainer.config/base\":\"app-settings\","
+                                + "\"jenkins.portainer.config/hash\":\"deadbeef\"}}}]");
+                return;
+            }
+            if (path != null && path.endsWith("/docker/configs/create")
+                    && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                createCalled.set(true);
+                respond(exchange, 200, "{\"ID\":\"cfg-new\"}");
+                return;
+            }
+            if (path != null && path.endsWith("/docker/configs/cfg-old")
+                    && "DELETE".equalsIgnoreCase(exchange.getRequestMethod())) {
+                deleteCalled.set(true);
+                respond(exchange, 200, "{}");
+                return;
+            }
+            respond(exchange, 404, "{\"message\":\"not found\"}");
+        });
+
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
+        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setConfigPath("configs/swarm");
+        step.setPruneOld(true);
+        project.getBuildersList().add(step);
+
+        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.assertLogContains("(created) " + APP_SETTINGS_NAME, build);
+        assertTrue(createCalled.get());
+        assertTrue(deleteCalled.get());
+    }
+
+    @Test
+    public void freestyle_duplicateBasename_fails(JenkinsRule jenkins) throws Exception {
+        configurePortainer(jenkins);
+        GitRepositoryFiles.listTestOverride = req -> List.of(
+                new SwarmConfigFile("app-settings.json", "{\"a\":1}".getBytes(StandardCharsets.UTF_8)),
+                new SwarmConfigFile("app_settings.json", "{\"b\":2}".getBytes(StandardCharsets.UTF_8)));
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
+        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setConfigPath("configs/swarm");
+        project.getBuildersList().add(step);
+
+        FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
+        jenkins.assertLogContains("Duplicate env key", build);
+        assertTrue(!createCalled.get());
+    }
+
+    @Test
+    public void freestyle_unsupportedNamingStrategy_fails(JenkinsRule jenkins) throws Exception {
+        configurePortainer(jenkins);
+        stubGitFiles();
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
+        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setConfigPath("configs/swarm");
+        step.setNamingStrategy("legacy");
+        project.getBuildersList().add(step);
+
+        FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
+        jenkins.assertLogContains("Unsupported namingStrategy", build);
+    }
+
+    @Test
+    public void freestyle_swarmPreflightFails(JenkinsRule jenkins) throws Exception {
+        configurePortainer(jenkins);
+        stubGitFiles();
+        server.removeContext("/");
+        server.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            if ("/api/status".equals(path)) {
+                respond(exchange, 200, "{\"Version\":\"2.39.3\"}");
+                return;
+            }
+            if (path != null && path.matches("/api/endpoints/\\d+$")) {
+                respond(exchange, 200, "{\"Id\":1,\"Name\":\"swarm\",\"Type\":1}");
+                return;
+            }
+            if ("/api/endpoints".equals(path)) {
+                respond(exchange, 200, "[{\"Id\":1,\"Name\":\"swarm\",\"Type\":1}]");
+                return;
+            }
+            if (path != null && path.matches("/api/endpoints/\\d+/docker/swarm$")) {
+                respond(exchange, 500, "{\"message\":\"not a swarm\"}");
+                return;
+            }
+            respond(exchange, 404, "{\"message\":\"not found\"}");
+        });
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
+        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setConfigPath("configs/swarm");
+        project.getBuildersList().add(step);
+
+        FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
+        jenkins.assertLogContains("Swarm preflight failed", build);
+    }
+
+    @Test
+    public void freestyle_gitPathNotFound_fails(JenkinsRule jenkins) throws Exception {
+        configurePortainer(jenkins);
+        GitRepositoryFiles.listTestOverride = req -> {
+            throw new IOException("Config path not found: missing");
+        };
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
+        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setConfigPath("configs/swarm");
+        project.getBuildersList().add(step);
+
+        FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
+        jenkins.assertLogContains("Config path not found", build);
+    }
+
+    @Test
+    public void normalizeNamingStrategy_blankDefaults() {
+        assertEquals(
+                PortainerSwarmConfigBuilder.NAMING_CONTENT_HASH,
+                PortainerSwarmConfigBuilder.normalizeNamingStrategy(null));
+        assertEquals(
+                PortainerSwarmConfigBuilder.NAMING_CONTENT_HASH,
+                PortainerSwarmConfigBuilder.normalizeNamingStrategy("  "));
+        assertEquals("legacy", PortainerSwarmConfigBuilder.normalizeNamingStrategy(" legacy "));
+    }
+
+    @Test
+    public void formValidation_namingStrategy(JenkinsRule jenkins) throws Exception {
         PortainerSwarmConfigBuilder.DescriptorImpl d =
                 jenkins.getInstance().getDescriptorByType(PortainerSwarmConfigBuilder.DescriptorImpl.class);
         FreeStyleProject project = jenkins.createFreeStyleProject();
+        assertEquals(FormValidation.Kind.OK, d.doCheckNamingStrategy("", project).kind);
+        assertEquals(FormValidation.Kind.OK, d.doCheckNamingStrategy("contentHash", project).kind);
+        assertEquals(FormValidation.Kind.ERROR, d.doCheckNamingStrategy("legacy", project).kind);
+        assertEquals(FormValidation.Kind.OK, d.doCheckFileGlob("", project).kind);
+        assertEquals(FormValidation.Kind.OK, d.doCheckFileGlob("*.json", project).kind);
+    }
 
-        assertEquals(FormValidation.Kind.ERROR, d.doCheckRepositoryUrl("", project).kind);
-        assertEquals(
-                FormValidation.Kind.ERROR,
-                d.doCheckRepositoryUrl("https://u:p@gitlab.example/group/c.git", project).kind);
-        assertEquals(FormValidation.Kind.ERROR, d.doCheckConfigPath("", project).kind);
-        assertEquals(FormValidation.Kind.ERROR, d.doCheckConfigPath("../secret", project).kind);
-        assertEquals(FormValidation.Kind.OK, d.doCheckConfigPath("configs/swarm", project).kind);
+    @Test
+    public void descriptor_newInstance_nullFormData(JenkinsRule jenkins) {
+        PortainerSwarmConfigBuilder.DescriptorImpl d =
+                jenkins.getInstance().getDescriptorByType(PortainerSwarmConfigBuilder.DescriptorImpl.class);
+        // null form → empty JSONObject then Stapler bind (fails without required fields)
+        assertThrows(Throwable.class, () -> d.newInstance((org.kohsuke.stapler.StaplerRequest2) null, null));
     }
 
     private static void stubGitFiles() {

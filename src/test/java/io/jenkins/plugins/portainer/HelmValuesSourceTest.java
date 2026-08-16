@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class HelmValuesSourceTest {
@@ -56,5 +58,21 @@ public class HelmValuesSourceTest {
         assertTrue(HelmValuesSource.isRepository("repository"));
         assertTrue(HelmValuesSource.isYaml("yaml"));
         assertFalse(HelmValuesSource.isYaml("none"));
+    }
+
+    @Test
+    public void releaseName_andValuesYamlValidation() {
+        assertEquals("Helm release name is required.", PortainerHelmBuilder.validateReleaseName(null));
+        assertTrue(PortainerHelmBuilder.validateReleaseName("BAD_NAME").contains("DNS-1123"));
+        assertNull(PortainerHelmBuilder.validateReleaseName("nginx"));
+        PortainerHelmBuilder.requireValidReleaseName("my-release");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> PortainerHelmBuilder.requireValidReleaseName(""));
+
+        PortainerHelmBuilder.requireLooksLikeYaml("replicaCount: 1\n");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> PortainerHelmBuilder.requireLooksLikeYaml("plain text"));
     }
 }

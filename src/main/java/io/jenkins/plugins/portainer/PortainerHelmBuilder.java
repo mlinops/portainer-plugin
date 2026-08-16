@@ -576,10 +576,8 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
                 repoUrl,
                 gitRef,
                 path,
-                gitAuth,
-                request.workspace,
-                request.launcher,
-                request.listener);
+                new GitRepositoryFiles.CloneContext(
+                        gitAuth, request.workspace, request.launcher, request.listener));
         if (content == null || content.isBlank()) {
             throw new IllegalArgumentException("Values file from repository is empty: " + path);
         }

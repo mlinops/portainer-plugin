@@ -1050,6 +1050,50 @@ public class PortainerClientTest {
         }
     }
 
+    @Test
+    public void mapTransportError_timeoutUnknownHostAndConnect() {
+        URI uri = URI.create("http://portainer.example:9000/api/status");
+        IOException timeout = PortainerClient.mapTransportError(
+                uri, new java.net.http.HttpTimeoutException("timed out"));
+        assertTrue(timeout.getMessage().toLowerCase().contains("timed out")
+                || timeout.getMessage().toLowerCase().contains("timeout"));
+
+        IOException unknown = PortainerClient.mapTransportError(
+                uri, new IOException("wrap", new java.net.UnknownHostException("portainer.example")));
+        assertTrue(unknown.getMessage().contains("portainer.example"));
+
+        IOException connect = PortainerClient.mapTransportError(
+                uri, new IOException("wrap", new java.net.ConnectException("Connection refused")));
+        assertTrue(connect.getMessage().toLowerCase().contains("connect")
+                || connect.getMessage().toLowerCase().contains("network"));
+
+        IOException generic = PortainerClient.mapTransportError(uri, new IOException("boom"));
+        assertEquals("boom", generic.getMessage());
+    }
+
+    @Test
+    public void errorHelperStatics_connectivitySanitizeAndHtml() {
+        assertTrue(PortainerClient.isConnectivityMessage("dial tcp 10.0.0.1:80: connectex"));
+        assertFalse(PortainerClient.isConnectivityMessage("Forbidden"));
+        assertEquals("safe", PortainerClient.sanitizeErrorDetail("safe"));
+        assertTrue(PortainerClient.looksLikeHtml("<!DOCTYPE html><html>".getBytes(StandardCharsets.UTF_8)));
+        assertFalse(PortainerClient.looksLikeHtml("{\"a\":1}".getBytes(StandardCharsets.UTF_8)));
+        assertEquals("a — b", PortainerClient.combineErrorFields("a", "b", null));
+        assertEquals("only", PortainerClient.combineErrorFields(null, null, "only"));
+    }
+
+    @Test
+    public void parseDockerConfigSummary_readsLabels() throws Exception {
+        JsonNode node = MAPPER.readTree(
+                "{\"ID\":\"cfg1\",\"Spec\":{\"Name\":\"app-07d8fcbc\",\"Labels\":"
+                        + "{\"jenkins.portainer.config/base\":\"app\",\"jenkins.portainer.config/hash\":\"07d8fcbc\"}}}");
+        PortainerClient.DockerConfigSummary summary = PortainerClient.parseDockerConfigSummary(node);
+        assertEquals("cfg1", summary.id);
+        assertEquals("app-07d8fcbc", summary.name);
+        assertEquals("app", summary.labels.get("jenkins.portainer.config/base"));
+        assertEquals("07d8fcbc", summary.labels.get("jenkins.portainer.config/hash"));
+    }
+
     private void capture(HttpExchange exchange) throws IOException {
         lastApiKey.set(exchange.getRequestHeaders().getFirst("X-API-Key"));
         lastMethod.set(exchange.getRequestMethod());

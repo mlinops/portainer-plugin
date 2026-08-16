@@ -342,10 +342,8 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
                     req.gitRef,
                     req.configDir,
                     req.glob,
-                    req.gitAuth,
-                    req.workspace,
-                    req.launcher,
-                    req.listener);
+                    new GitRepositoryFiles.CloneContext(
+                            req.gitAuth, req.workspace, req.launcher, req.listener));
         } catch (IOException e) {
             String msg = PortainerConnections.truncateMessage(e);
             if (msg.startsWith("Config path not found")

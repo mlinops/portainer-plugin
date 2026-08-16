@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -62,6 +63,16 @@ public class PortainerEnvParserTest {
                 IllegalArgumentException.class,
                 () -> PortainerEnvParser.parse("bad-key=1"));
         assertTrue(ex.getMessage().toLowerCase().contains("env key"));
+    }
+
+    @Test
+    public void parse_rejectsVeryLongInvalidKey_truncatesMessage() {
+        String longKey = "bad-" + "x".repeat(100);
+        IllegalArgumentException ex = assertThrows(
+                IllegalArgumentException.class,
+                () -> PortainerEnvParser.parse(longKey));
+        assertTrue(ex.getMessage().contains("\u2026"));
+        assertFalse(ex.getMessage().contains(longKey));
     }
 
     @Test
