@@ -339,9 +339,7 @@ public class ConnectionModeTest {
         step.setVaultAppRoleCredentialsId("vault-approle");
         PortainerBuildLogger log = new PortainerBuildLogger(
                 java.util.logging.Logger.getLogger("test"), TaskListener.NULL, false);
-        assertEquals(
-                null,
-                step.resolveVaultOverlay(null, new hudson.EnvVars(), null, null, null, log));
+        assertTrue(step.resolveVaultOverlay(null, new hudson.EnvVars(), null, null, null, log).isEmpty());
     }
 
     @Test
@@ -350,9 +348,7 @@ public class ConnectionModeTest {
         step.setVaultConnectionMode(PortainerStackBuilder.MODE_INHERIT);
         PortainerBuildLogger log = new PortainerBuildLogger(
                 java.util.logging.Logger.getLogger("test"), TaskListener.NULL, false);
-        assertEquals(
-                null,
-                step.resolveVaultOverlay(null, new hudson.EnvVars(), null, null, null, log));
+        assertTrue(step.resolveVaultOverlay(null, new hudson.EnvVars(), null, null, null, log).isEmpty());
     }
 
     @Test

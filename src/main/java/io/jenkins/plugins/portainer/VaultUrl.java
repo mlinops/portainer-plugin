@@ -19,7 +19,7 @@ final class VaultUrl {
             throw new IllegalArgumentException(
                     "Vault URL is required (http:// or https://vault.example:8200).");
         }
-        String clean = vaultUrl.trim().replaceAll("/+$", "");
+        String clean = VaultClient.stripTrailingSlashes(vaultUrl.trim());
         boolean https = clean.regionMatches(true, 0, "https://", 0, 8);
         boolean http = clean.regionMatches(true, 0, "http://", 0, 7);
         if (!https && !http) {

@@ -8,6 +8,7 @@ import hudson.model.Run;
 import hudson.model.TaskListener;
 import jenkins.model.Jenkins;
 
+import java.io.PrintStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
@@ -52,6 +53,13 @@ final class VaultPluginInherit {
     private static final String CLASS_LOGICAL_RESPONSE =
             "io.github.jopenlibs.vault.response.LogicalResponse";
 
+    private static final String METHOD_GET_VAULT_URL = "getVaultUrl";
+    private static final String METHOD_GET_VAULT_CREDENTIAL_ID = "getVaultCredentialId";
+    private static final String METHOD_GET_VAULT_CREDENTIAL = "getVaultCredential";
+
+    /** Vault HTTP path separator (always {@code /}, not {@link java.io.File#separator}). */
+    private static final String VAULT_PATH_SEP = "/";
+
     static final String VAULT_PLUGIN_MISSING = "HashiCorp Vault Plugin is not installed.";
 
     static final String VAULT_PLUGIN_UNCONFIGURED = "Vault Plugin System is not configured.";
@@ -73,21 +81,9 @@ final class VaultPluginInherit {
             ClassLoader cl = vaultApiClassLoader();
             Class<?> vaultConfigurationClass = loadClass(CLASS_VAULT_CONFIGURATION, cl);
             Class<?> vaultAccessorClass = loadClass(CLASS_VAULT_ACCESSOR, cl);
-            Object stepOverrides = vaultConfigurationClass.getConstructor().newInstance();
-            if (namespace != null && !namespace.isBlank()) {
-                vaultConfigurationClass
-                        .getMethod("setVaultNamespace", String.class)
-                        .invoke(stepOverrides, namespace.trim());
-            }
-            vaultConfigurationClass.getMethod("setEngineVersion", Integer.class).invoke(stepOverrides, 2);
-            Method pullAndMerge = vaultAccessorClass.getMethod(
-                    "pullAndMergeConfiguration", Run.class, vaultConfigurationClass);
-            Object configuration = pullAndMerge.invoke(null, run, stepOverrides);
-            String vaultUrl = (String) vaultConfigurationClass.getMethod("getVaultUrl").invoke(configuration);
-            if (vaultUrl == null || vaultUrl.isBlank()) {
-                throw new AbortException(VAULT_PLUGIN_UNCONFIGURED);
-            }
-            return vaultUrl.trim();
+            Object configuration =
+                    pullAndMergeConfiguration(run, namespace, vaultConfigurationClass, vaultAccessorClass);
+            return requireVaultUrl(configuration, vaultConfigurationClass);
         } catch (AbortException e) {
             throw e;
         } catch (ClassNotFoundException | NoClassDefFoundError e) {
@@ -111,7 +107,6 @@ final class VaultPluginInherit {
      * @param namespace  optional step override (Enterprise); blank keeps System/folder namespace
      * @param log        dual-sink build logger (nullable; falls back to {@code listener} println)
      */
-    @SuppressWarnings("unchecked")
     static Map<String, String> readKvV2(
             Run<?, ?> run,
             EnvVars buildEnv,
@@ -133,124 +128,27 @@ final class VaultPluginInherit {
             Class<?> vaultConfigClass = loadClass(CLASS_VAULT_CONFIG, cl);
             Class<?> vaultCredentialClass = loadClass(CLASS_VAULT_CREDENTIAL, cl);
 
-            Object stepOverrides = vaultConfigurationClass.getConstructor().newInstance();
-            if (namespace != null && !namespace.isBlank()) {
-                vaultConfigurationClass
-                        .getMethod("setVaultNamespace", String.class)
-                        .invoke(stepOverrides, namespace.trim());
-            }
-            vaultConfigurationClass.getMethod("setEngineVersion", Integer.class).invoke(stepOverrides, 2);
+            Object configuration =
+                    pullAndMergeConfiguration(run, namespace, vaultConfigurationClass, vaultAccessorClass);
+            requireVaultUrl(configuration, vaultConfigurationClass);
 
-            Method pullAndMerge = vaultAccessorClass.getMethod(
-                    "pullAndMergeConfiguration", Run.class, vaultConfigurationClass);
-            Object configuration = pullAndMerge.invoke(null, run, stepOverrides);
-
-            String vaultUrl = (String) vaultConfigurationClass.getMethod("getVaultUrl").invoke(configuration);
-            if (vaultUrl == null || vaultUrl.isBlank()) {
-                throw new AbortException(VAULT_PLUGIN_UNCONFIGURED);
-            }
-            String credentialId =
-                    (String) vaultConfigurationClass.getMethod("getVaultCredentialId").invoke(configuration);
-            Object inlineCredential =
-                    vaultConfigurationClass.getMethod("getVaultCredential").invoke(configuration);
-            if ((credentialId == null || credentialId.isBlank()) && inlineCredential == null) {
-                throw new AbortException(VAULT_PLUGIN_UNCONFIGURED);
-            }
-
-            Object vaultConfig = vaultConfigurationClass.getMethod("getVaultConfig").invoke(configuration);
-            Object credential = vaultConfigurationClass.getMethod("getVaultCredential").invoke(configuration);
-            if (credential == null) {
-                Method retrieve = vaultAccessorClass.getMethod(
-                        "retrieveVaultCredentials", Run.class, vaultConfigurationClass);
-                credential = retrieve.invoke(null, run, configuration);
-            }
-
-            Object accessor = vaultAccessorClass.getConstructor().newInstance();
-            vaultAccessorClass.getMethod("setConfig", vaultConfigClass).invoke(accessor, vaultConfig);
-            vaultAccessorClass.getMethod("setCredential", vaultCredentialClass).invoke(accessor, credential);
-
-            String policiesRaw =
-                    (String) vaultConfigurationClass.getMethod("getPolicies").invoke(configuration);
-            try {
-                Method generatePolicies =
-                        vaultAccessorClass.getDeclaredMethod("generatePolicies", String.class, EnvVars.class);
-                generatePolicies.setAccessible(true);
-                List<String> policies =
-                        (List<String>) generatePolicies.invoke(
-                                null, policiesRaw, buildEnv == null ? new EnvVars() : buildEnv);
-                vaultAccessorClass.getMethod("setPolicies", List.class).invoke(accessor, policies);
-            } catch (ReflectiveOperationException | SecurityException e) {
-                LOGGER.log(Level.FINE, "Vault Inherit: could not apply policy templates", e);
-            }
-
-            int maxRetries = (Integer) vaultConfigurationClass.getMethod("getMaxRetries").invoke(configuration);
-            int retryMs =
-                    (Integer) vaultConfigurationClass.getMethod("getRetryIntervalMilliseconds").invoke(configuration);
-            vaultAccessorClass.getMethod("setMaxRetries", int.class).invoke(accessor, maxRetries);
-            vaultAccessorClass
-                    .getMethod("setRetryIntervalMilliseconds", int.class)
-                    .invoke(accessor, retryMs);
-
-            vaultAccessorClass.getMethod("init").invoke(accessor);
-
-            String prefixPath =
-                    (String) vaultConfigurationClass.getMethod("getPrefixPath").invoke(configuration);
-            String prefix = "";
-            if (prefixPath != null && !prefixPath.isBlank()) {
-                String expanded = buildEnv == null ? prefixPath.trim() : buildEnv.expand(prefixPath.trim());
-                prefix = Util.ensureEndsWith(expanded, "/");
-            }
-            String path = prefix + mount + "/" + secretPath;
-
-            Integer engineVersion =
-                    (Integer) vaultConfigurationClass.getMethod("getEngineVersion").invoke(configuration);
-            if (engineVersion == null) {
-                engineVersion = 2;
-            }
-
-            if (log != null) {
-                log.debug("Vault Inherit reading path=" + path
-                        + " engineVersion=" + engineVersion
-                        + (namespace != null && !namespace.isBlank()
-                                ? " namespace=" + namespace.trim()
-                                : ""));
-            }
-
-            Object response = vaultAccessorClass
-                    .getMethod("read", String.class, Integer.class)
-                    .invoke(accessor, path, engineVersion);
-
-            Method responseHasErrors = vaultAccessorClass.getMethod(
-                    "responseHasErrors",
-                    vaultConfigurationClass,
-                    java.io.PrintStream.class,
-                    String.class,
-                    loadClass(CLASS_LOGICAL_RESPONSE, cl));
-            boolean errors = (Boolean) responseHasErrors.invoke(
-                    null,
+            Object accessor = prepareAccessor(
+                    run,
+                    buildEnv,
                     configuration,
-                    listener == null ? System.out : listener.getLogger(),
-                    path,
-                    response);
-            if (errors) {
-                throw new AbortException(
-                        "Vault Inherit: secret not found or error at path '" + path
-                                + "' (see build log). Check path/mount and Vault Plugin configuration.");
-            }
+                    vaultConfigurationClass,
+                    vaultAccessorClass,
+                    vaultConfigClass,
+                    vaultCredentialClass);
 
-            Map<String, String> data =
-                    (Map<String, String>) response.getClass().getMethod("getData").invoke(response);
-            if (data == null || data.isEmpty()) {
-                return Map.of();
-            }
-            Map<String, String> out = new LinkedHashMap<>();
-            for (Map.Entry<String, String> e : data.entrySet()) {
-                if (e.getKey() == null || e.getKey().isBlank()) {
-                    continue;
-                }
-                out.put(e.getKey(), e.getValue() == null ? "" : e.getValue());
-            }
-            return out;
+            String path = buildSecretPath(configuration, vaultConfigurationClass, buildEnv, mount, secretPath);
+            Integer engineVersion = resolveEngineVersion(configuration, vaultConfigurationClass);
+            logInheritRead(log, path, engineVersion, namespace);
+
+            Object response = readSecret(accessor, vaultAccessorClass, path, engineVersion);
+            assertNoResponseErrors(
+                    configuration, vaultConfigurationClass, vaultAccessorClass, cl, listener, path, response);
+            return toFlatStringMap(response);
         } catch (AbortException e) {
             throw e;
         } catch (ClassNotFoundException | NoClassDefFoundError e) {
@@ -264,6 +162,187 @@ final class VaultPluginInherit {
                     "Vault Inherit failed (incompatible HashiCorp Vault Plugin API). "
                             + "Update both plugins, or use Vault Manual on this step.");
         }
+    }
+
+    private static Object pullAndMergeConfiguration(
+            Run<?, ?> run,
+            String namespace,
+            Class<?> vaultConfigurationClass,
+            Class<?> vaultAccessorClass) throws ReflectiveOperationException {
+        Object stepOverrides = vaultConfigurationClass.getConstructor().newInstance();
+        if (namespace != null && !namespace.isBlank()) {
+            vaultConfigurationClass
+                    .getMethod("setVaultNamespace", String.class)
+                    .invoke(stepOverrides, namespace.trim());
+        }
+        vaultConfigurationClass.getMethod("setEngineVersion", Integer.class).invoke(stepOverrides, 2);
+        Method pullAndMerge = vaultAccessorClass.getMethod(
+                "pullAndMergeConfiguration", Run.class, vaultConfigurationClass);
+        return pullAndMerge.invoke(null, run, stepOverrides);
+    }
+
+    private static String requireVaultUrl(Object configuration, Class<?> vaultConfigurationClass)
+            throws ReflectiveOperationException, AbortException {
+        String vaultUrl =
+                (String) vaultConfigurationClass.getMethod(METHOD_GET_VAULT_URL).invoke(configuration);
+        if (vaultUrl == null || vaultUrl.isBlank()) {
+            throw new AbortException(VAULT_PLUGIN_UNCONFIGURED);
+        }
+        return vaultUrl.trim();
+    }
+
+    private static Object prepareAccessor(
+            Run<?, ?> run,
+            EnvVars buildEnv,
+            Object configuration,
+            Class<?> vaultConfigurationClass,
+            Class<?> vaultAccessorClass,
+            Class<?> vaultConfigClass,
+            Class<?> vaultCredentialClass) throws ReflectiveOperationException, AbortException {
+        Object credential =
+                resolveCredential(run, configuration, vaultConfigurationClass, vaultAccessorClass);
+        Object vaultConfig = vaultConfigurationClass.getMethod("getVaultConfig").invoke(configuration);
+
+        Object accessor = vaultAccessorClass.getConstructor().newInstance();
+        vaultAccessorClass.getMethod("setConfig", vaultConfigClass).invoke(accessor, vaultConfig);
+        vaultAccessorClass.getMethod("setCredential", vaultCredentialClass).invoke(accessor, credential);
+        applyPolicies(accessor, configuration, vaultConfigurationClass, vaultAccessorClass, buildEnv);
+
+        int maxRetries = (Integer) vaultConfigurationClass.getMethod("getMaxRetries").invoke(configuration);
+        int retryMs =
+                (Integer) vaultConfigurationClass.getMethod("getRetryIntervalMilliseconds").invoke(configuration);
+        vaultAccessorClass.getMethod("setMaxRetries", int.class).invoke(accessor, maxRetries);
+        vaultAccessorClass
+                .getMethod("setRetryIntervalMilliseconds", int.class)
+                .invoke(accessor, retryMs);
+        vaultAccessorClass.getMethod("init").invoke(accessor);
+        return accessor;
+    }
+
+    private static Object resolveCredential(
+            Run<?, ?> run,
+            Object configuration,
+            Class<?> vaultConfigurationClass,
+            Class<?> vaultAccessorClass) throws ReflectiveOperationException, AbortException {
+        String credentialId =
+                (String) vaultConfigurationClass.getMethod(METHOD_GET_VAULT_CREDENTIAL_ID).invoke(configuration);
+        Object credential =
+                vaultConfigurationClass.getMethod(METHOD_GET_VAULT_CREDENTIAL).invoke(configuration);
+        if ((credentialId == null || credentialId.isBlank()) && credential == null) {
+            throw new AbortException(VAULT_PLUGIN_UNCONFIGURED);
+        }
+        if (credential == null) {
+            Method retrieve = vaultAccessorClass.getMethod(
+                    "retrieveVaultCredentials", Run.class, vaultConfigurationClass);
+            credential = retrieve.invoke(null, run, configuration);
+        }
+        return credential;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void applyPolicies(
+            Object accessor,
+            Object configuration,
+            Class<?> vaultConfigurationClass,
+            Class<?> vaultAccessorClass,
+            EnvVars buildEnv) {
+        try {
+            String policiesRaw =
+                    (String) vaultConfigurationClass.getMethod("getPolicies").invoke(configuration);
+            Method generatePolicies =
+                    vaultAccessorClass.getDeclaredMethod("generatePolicies", String.class, EnvVars.class);
+            generatePolicies.setAccessible(true);
+            List<String> policies =
+                    (List<String>) generatePolicies.invoke(
+                            null, policiesRaw, buildEnv == null ? new EnvVars() : buildEnv);
+            vaultAccessorClass.getMethod("setPolicies", List.class).invoke(accessor, policies);
+        } catch (ReflectiveOperationException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Vault Inherit: could not apply policy templates", e);
+        }
+    }
+
+    private static String buildSecretPath(
+            Object configuration,
+            Class<?> vaultConfigurationClass,
+            EnvVars buildEnv,
+            String mount,
+            String secretPath) throws ReflectiveOperationException {
+        String prefixPath =
+                (String) vaultConfigurationClass.getMethod("getPrefixPath").invoke(configuration);
+        String prefix = "";
+        if (prefixPath != null && !prefixPath.isBlank()) {
+            String expanded = buildEnv == null ? prefixPath.trim() : buildEnv.expand(prefixPath.trim());
+            prefix = Util.ensureEndsWith(expanded, VAULT_PATH_SEP);
+        }
+        return prefix + mount + VAULT_PATH_SEP + secretPath;
+    }
+
+    private static Integer resolveEngineVersion(Object configuration, Class<?> vaultConfigurationClass)
+            throws ReflectiveOperationException {
+        Integer engineVersion =
+                (Integer) vaultConfigurationClass.getMethod("getEngineVersion").invoke(configuration);
+        return engineVersion == null ? 2 : engineVersion;
+    }
+
+    private static void logInheritRead(
+            PortainerBuildLogger log, String path, Integer engineVersion, String namespace) {
+        if (log == null) {
+            return;
+        }
+        log.debug("Vault Inherit reading path=" + path
+                + " engineVersion=" + engineVersion
+                + (namespace != null && !namespace.isBlank()
+                        ? " namespace=" + namespace.trim()
+                        : ""));
+    }
+
+    private static Object readSecret(
+            Object accessor, Class<?> vaultAccessorClass, String path, Integer engineVersion)
+            throws ReflectiveOperationException {
+        return vaultAccessorClass
+                .getMethod("read", String.class, Integer.class)
+                .invoke(accessor, path, engineVersion);
+    }
+
+    private static void assertNoResponseErrors(
+            Object configuration,
+            Class<?> vaultConfigurationClass,
+            Class<?> vaultAccessorClass,
+            ClassLoader cl,
+            TaskListener listener,
+            String path,
+            Object response) throws ReflectiveOperationException, AbortException {
+        Method responseHasErrors = vaultAccessorClass.getMethod(
+                "responseHasErrors",
+                vaultConfigurationClass,
+                PrintStream.class,
+                String.class,
+                loadClass(CLASS_LOGICAL_RESPONSE, cl));
+        PrintStream out = listener == null ? TaskListener.NULL.getLogger() : listener.getLogger();
+        boolean errors = (Boolean) responseHasErrors.invoke(null, configuration, out, path, response);
+        if (errors) {
+            throw new AbortException(
+                    "Vault Inherit: secret not found or error at path '" + path
+                            + "' (see build log). Check path/mount and Vault Plugin configuration.");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> toFlatStringMap(Object response)
+            throws ReflectiveOperationException {
+        Map<String, String> data =
+                (Map<String, String>) response.getClass().getMethod("getData").invoke(response);
+        if (data == null || data.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : data.entrySet()) {
+            if (e.getKey() == null || e.getKey().isBlank()) {
+                continue;
+            }
+            out.put(e.getKey(), e.getValue() == null ? "" : e.getValue());
+        }
+        return out;
     }
 
     private static AbortException mapPluginInvoke(InvocationTargetException e) {
@@ -329,14 +408,18 @@ final class VaultPluginInherit {
                 return false;
             }
             String vaultUrl =
-                    (String) configuration.getClass().getMethod("getVaultUrl").invoke(configuration);
+                    (String) configuration.getClass().getMethod(METHOD_GET_VAULT_URL).invoke(configuration);
             if (vaultUrl == null || vaultUrl.isBlank()) {
                 return false;
             }
-            String credentialId =
-                    (String) configuration.getClass().getMethod("getVaultCredentialId").invoke(configuration);
-            Object inlineCredential =
-                    configuration.getClass().getMethod("getVaultCredential").invoke(configuration);
+            String credentialId = (String) configuration
+                    .getClass()
+                    .getMethod(METHOD_GET_VAULT_CREDENTIAL_ID)
+                    .invoke(configuration);
+            Object inlineCredential = configuration
+                    .getClass()
+                    .getMethod(METHOD_GET_VAULT_CREDENTIAL)
+                    .invoke(configuration);
             return (credentialId != null && !credentialId.isBlank()) || inlineCredential != null;
         } catch (ReflectiveOperationException | NoClassDefFoundError e) {
             LOGGER.log(Level.FINE, "Vault Inherit: could not read GlobalVaultConfiguration", e);
@@ -357,7 +440,7 @@ final class VaultPluginInherit {
 
     static PluginWrapper findVaultPluginWrapper() {
         Jenkins jenkins = Jenkins.getInstanceOrNull();
-        if (jenkins == null || jenkins.getPluginManager() == null) {
+        if (jenkins == null) {
             return null;
         }
         PluginWrapper primary = jenkins.getPluginManager().getPlugin(VAULT_PLUGIN_SHORT_NAME);
@@ -387,7 +470,7 @@ final class VaultPluginInherit {
 
     private static ClassLoader uberClassLoaderOrNull() {
         Jenkins jenkins = Jenkins.getInstanceOrNull();
-        if (jenkins == null || jenkins.getPluginManager() == null) {
+        if (jenkins == null) {
             return null;
         }
         return jenkins.getPluginManager().uberClassLoader;

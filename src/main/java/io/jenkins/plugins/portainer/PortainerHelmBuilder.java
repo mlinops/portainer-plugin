@@ -359,8 +359,8 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
             }
             final String valuesYaml;
             try {
-                valuesYaml = resolveValues(
-                        inputs.mode, buildEnv, item, workspace, launcher, listener, valuesRepo)
+                valuesYaml = resolveValues(new ResolveValuesRequest(
+                                inputs.mode, buildEnv, item, workspace, launcher, listener, valuesRepo))
                         .content;
             } catch (IllegalArgumentException | IllegalStateException e) {
                 throw PortainerConnections.abort(log, e.getMessage());
@@ -419,15 +419,14 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         if (!HelmValuesSource.isRepository(mode)) {
             return ValuesRepoLocals.none();
         }
-        String valuesRepoUrl = PortainerConnections.abortOn(log, () -> GitRepositoryUrl.normalize(
-                buildEnv.expand(valuesRepositoryUrl == null ? "" : valuesRepositoryUrl)));
+        String valuesRepoUrl = PortainerConnections.abortOn(
+                log, () -> GitRepositoryUrl.normalize(expandValuesRepositoryUrl(buildEnv)));
         String valuesGitRef = PortainerStackBuilder.resolveRepositoryReference(
                 valuesRepositoryReferenceName, buildEnv);
-        String valuesPath = PortainerConnections.abortOn(log, () -> PortainerComposePath.normalize(
-                valuesFilePath == null || valuesFilePath.isBlank()
-                        ? DEFAULT_VALUES_FILE
-                        : buildEnv.expand(valuesFilePath),
-                VALUES_FILE_PATH_LABEL));
+        String valuesPath = PortainerConnections.abortOn(
+                log,
+                () -> PortainerComposePath.normalize(
+                        expandValuesFilePath(buildEnv), VALUES_FILE_PATH_LABEL));
         PortainerBuildLogger.logGitPreflight(
                 log, valuesGitRef, valuesRepoUrl, valuesPath, null, null, null);
         return new ValuesRepoLocals(valuesRepoUrl, valuesGitRef, valuesPath);
@@ -543,21 +542,15 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         }
     }
 
-    private ResolvedValues resolveValues(
-            String mode,
-            EnvVars buildEnv,
-            Item item,
-            FilePath workspace,
-            Launcher launcher,
-            TaskListener listener,
-            ValuesRepoLocals precomputed) throws IOException, InterruptedException {
-        if (HelmValuesSource.isNone(mode)) {
+    private ResolvedValues resolveValues(ResolveValuesRequest request)
+            throws IOException, InterruptedException {
+        if (HelmValuesSource.isNone(request.mode)) {
             return ResolvedValues.none();
         }
-        if (HelmValuesSource.isYaml(mode)) {
+        if (HelmValuesSource.isYaml(request.mode)) {
             return resolveYamlValues();
         }
-        return resolveRepositoryValues(buildEnv, item, workspace, launcher, listener, precomputed);
+        return resolveRepositoryValues(request);
     }
 
     private ResolvedValues resolveYamlValues() {
@@ -568,41 +561,63 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         return ResolvedValues.yaml(values);
     }
 
-    private ResolvedValues resolveRepositoryValues(
-            EnvVars buildEnv,
-            Item item,
-            FilePath workspace,
-            Launcher launcher,
-            TaskListener listener,
-            ValuesRepoLocals precomputed) throws IOException, InterruptedException {
-        if (workspace == null || launcher == null) {
+    private ResolvedValues resolveRepositoryValues(ResolveValuesRequest request)
+            throws IOException, InterruptedException {
+        if (request.workspace == null || request.launcher == null) {
             throw new IllegalStateException(
                     "Helm Values from repository require an agent workspace (wrap the step in node { } / agent any).");
         }
-        String repoUrl = precomputed.repoUrl != null
-                ? precomputed.repoUrl
-                : GitRepositoryUrl.normalize(
-                        buildEnv.expand(valuesRepositoryUrl == null ? "" : valuesRepositoryUrl));
-        String path = precomputed.path != null
-                ? precomputed.path
-                : PortainerComposePath.normalize(
-                        valuesFilePath == null || valuesFilePath.isBlank()
-                                ? DEFAULT_VALUES_FILE
-                                : buildEnv.expand(valuesFilePath),
-                        VALUES_FILE_PATH_LABEL);
-        String gitRef = precomputed.gitRef != null
-                ? precomputed.gitRef
-                : PortainerStackBuilder.resolveRepositoryReference(
-                        valuesRepositoryReferenceName, buildEnv);
+        String repoUrl = resolveValuesRepoUrl(request.buildEnv, request.precomputed);
+        String path = resolveValuesPath(request.buildEnv, request.precomputed);
+        String gitRef = resolveValuesGitRef(request.buildEnv, request.precomputed);
         PortainerCredentials.GitAuth gitAuth =
-                PortainerConnections.resolveOptionalGitAuth(valuesGitCredentialsId, item);
+                PortainerConnections.resolveOptionalGitAuth(valuesGitCredentialsId, request.item);
         String content = GitRepositoryFiles.readFile(
-                repoUrl, gitRef, path, gitAuth, workspace, launcher, listener);
+                repoUrl,
+                gitRef,
+                path,
+                gitAuth,
+                request.workspace,
+                request.launcher,
+                request.listener);
         if (content == null || content.isBlank()) {
             throw new IllegalArgumentException("Values file from repository is empty: " + path);
         }
         requireLooksLikeYaml(content);
         return ResolvedValues.repository(content, repoUrl, gitRef, path);
+    }
+
+    private String resolveValuesRepoUrl(EnvVars buildEnv, ValuesRepoLocals precomputed) {
+        if (precomputed.repoUrl != null) {
+            return precomputed.repoUrl;
+        }
+        return GitRepositoryUrl.normalize(expandValuesRepositoryUrl(buildEnv));
+    }
+
+    private String resolveValuesPath(EnvVars buildEnv, ValuesRepoLocals precomputed) {
+        if (precomputed.path != null) {
+            return precomputed.path;
+        }
+        return PortainerComposePath.normalize(expandValuesFilePath(buildEnv), VALUES_FILE_PATH_LABEL);
+    }
+
+    private String resolveValuesGitRef(EnvVars buildEnv, ValuesRepoLocals precomputed) {
+        if (precomputed.gitRef != null) {
+            return precomputed.gitRef;
+        }
+        return PortainerStackBuilder.resolveRepositoryReference(valuesRepositoryReferenceName, buildEnv);
+    }
+
+    private String expandValuesRepositoryUrl(EnvVars buildEnv) {
+        String raw = valuesRepositoryUrl == null ? "" : valuesRepositoryUrl;
+        return buildEnv.expand(raw);
+    }
+
+    private String expandValuesFilePath(EnvVars buildEnv) {
+        if (valuesFilePath == null || valuesFilePath.isBlank()) {
+            return DEFAULT_VALUES_FILE;
+        }
+        return buildEnv.expand(valuesFilePath);
     }
 
     private static boolean blank(String value) {
@@ -693,6 +708,33 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         }
     }
 
+    private static final class ResolveValuesRequest {
+        final String mode;
+        final EnvVars buildEnv;
+        final Item item;
+        final FilePath workspace;
+        final Launcher launcher;
+        final TaskListener listener;
+        final ValuesRepoLocals precomputed;
+
+        ResolveValuesRequest(
+                String mode,
+                EnvVars buildEnv,
+                Item item,
+                FilePath workspace,
+                Launcher launcher,
+                TaskListener listener,
+                ValuesRepoLocals precomputed) {
+            this.mode = mode;
+            this.buildEnv = buildEnv;
+            this.item = item;
+            this.workspace = workspace;
+            this.launcher = launcher;
+            this.listener = listener;
+            this.precomputed = precomputed;
+        }
+    }
+
     private static final class ValuesRepoLocals {
         final String repoUrl;
         final String gitRef;
@@ -776,15 +818,17 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
 
         @Override
         public Builder newInstance(StaplerRequest2 req, JSONObject formData) throws Descriptor.FormException {
-            if (formData != null) {
-                ConnectionMode.flattenRadioBlock(
-                        formData,
-                        "portainerConnectionMode",
-                        "portainerUrl",
-                        "portainerCredentialsId");
-                HelmValuesSource.flattenRadioBlock(formData);
+            JSONObject data = formData;
+            if (data == null) {
+                data = new JSONObject();
             }
-            return super.newInstance(req, formData);
+            ConnectionMode.flattenRadioBlock(
+                    data,
+                    "portainerConnectionMode",
+                    "portainerUrl",
+                    "portainerCredentialsId");
+            HelmValuesSource.flattenRadioBlock(data);
+            return super.newInstance(req, data);
         }
 
         public String getPortainerConnectionSummary() {

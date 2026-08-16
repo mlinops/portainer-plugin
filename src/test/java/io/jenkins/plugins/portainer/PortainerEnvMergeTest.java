@@ -28,6 +28,14 @@ public class PortainerEnvMergeTest {
     }
 
     @Test
+    public void merge_emptyVault_keepsStep() {
+        List<PortainerClient.EnvPair> step = List.of(new PortainerClient.EnvPair("A", "1"));
+        List<PortainerClient.EnvPair> merged = PortainerEnvMerge.merge(step, Map.of());
+        assertEquals(1, merged.size());
+        assertEquals("1", merged.get(0).value);
+    }
+
+    @Test
     public void merge_nullVault_keepsStep() {
         List<PortainerClient.EnvPair> step = List.of(new PortainerClient.EnvPair("A", "1"));
         List<PortainerClient.EnvPair> merged = PortainerEnvMerge.merge(step, null);

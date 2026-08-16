@@ -251,40 +251,7 @@ public class PortainerManifestBuilder extends Builder implements SimpleBuildStep
             EnvVars buildEnv,
             PortainerBuildLogger log) throws InterruptedException, IOException {
         long startedNs = System.nanoTime();
-
-        final String expandedNamespace = PortainerConnections.abortOn(log, () -> {
-            PortainerStackName.requireValidOptional(stackName);
-            return resolveNamespace(namespace, buildEnv);
-        });
-        final int endpoint = PortainerConnections.abortOn(
-                log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
-
-        final boolean yamlMode = StackSource.isYaml(getStackSource());
-        final String yamlContent;
-        final String repoUrl;
-        final String gitRef;
-        final String manifestPath;
-        if (yamlMode) {
-            yamlContent = stackFileContent;
-            if (yamlContent == null || yamlContent.isBlank()) {
-                throw PortainerConnections.abort(log, "Manifest YAML content is required for Manual YAML source.");
-            }
-            PortainerConnections.abortOn(log, () -> {
-                requireLooksLikeYaml(yamlContent);
-                return null;
-            });
-            repoUrl = null;
-            gitRef = null;
-            manifestPath = null;
-        } else {
-            yamlContent = null;
-            repoUrl = PortainerConnections.abortOn(log, () -> GitRepositoryUrl.normalize(repositoryUrl));
-            manifestPath = PortainerConnections.abortOn(log, () -> PortainerComposePath.normalize(
-                    manifestFilePath == null || manifestFilePath.isBlank()
-                            ? DEFAULT_MANIFEST_FILE
-                            : buildEnv.expand(manifestFilePath)));
-            gitRef = PortainerStackBuilder.resolveRepositoryReference(repositoryReferenceName, buildEnv);
-        }
+        ManifestParsedInputs inputs = parseManifestInputs(buildEnv, log);
 
         PortainerGlobalConfiguration cfg = PortainerGlobalConfiguration.get();
         final PortainerConnections.Authenticated auth = PortainerConnections.resolveAuthenticated(
@@ -299,64 +266,140 @@ public class PortainerManifestBuilder extends Builder implements SimpleBuildStep
         Item item = run.getParent();
 
         PortainerCredentials.GitAuth gitAuth = null;
-        if (!yamlMode) {
+        if (!inputs.yamlMode) {
             gitAuth = PortainerConnections.resolveOptionalGitAuth(gitCredentialsId, item, log);
         }
 
-        // Portainer → Git → mutate
-        PortainerBuildLogger.debugPortainerStart(log, connection, endpoint, null);
-        log.info("Manifest name=" + stackName + " namespace=" + expandedNamespace);
-        if (yamlMode) {
-            log.debug("yamlLength=" + yamlContent.length()
-                    + " yamlHash=" + PortainerConnections.shortContentHash(yamlContent));
-        }
+        logManifestPlan(log, connection, inputs);
 
         try (PortainerClient client = new PortainerClient(
                 connection.connectTimeoutMs, connection.readTimeoutMs, log)) {
-            PortainerConnections.runPreflight(client, connection, apiKey, endpoint, true, true, log);
+            PortainerConnections.runPreflight(
+                    client, connection, apiKey, inputs.endpoint, true, true, log);
 
-            if (!yamlMode) {
+            if (!inputs.yamlMode) {
                 PortainerBuildLogger.logGitPreflight(
-                        log, gitRef, repoUrl, null, null, null, manifestPath);
+                        log, inputs.gitRef, inputs.repoUrl, null, null, null, inputs.manifestPath);
             }
 
             if (validateOnly) {
-                log.info("Validate-only — skipping deploy");
-                if (ensureNamespace) {
-                    log.debug("Would ensure namespace=" + expandedNamespace);
-                }
-                log.debug("Would create-or-update manifest from "
-                        + (yamlMode ? "YAML" : "Git")
-                        + " name=" + stackName
-                        + " namespace=" + expandedNamespace);
-                summarize(log, startedNs, "validated", -1);
+                finishValidateOnly(log, startedNs, inputs);
                 return;
             }
 
-            final DeployOutcome deploy;
-            try {
-                if (ensureNamespace) {
-                    KubernetesNamespaces.ensure(
-                            client, connection, apiKey, endpoint, expandedNamespace, log);
-                }
-                int existingId = resolveExistingStackId(client, connection, apiKey, endpoint, log);
-                if (yamlMode) {
-                    deploy = deployYaml(
-                            client, connection, apiKey, endpoint, existingId, yamlContent,
-                            expandedNamespace);
-                } else {
-                    deploy = deployGit(
-                            client, connection, apiKey, endpoint, existingId, repoUrl, manifestPath,
-                            gitRef, gitAuth, expandedNamespace);
-                }
-            } catch (AbortException e) {
-                throw e;
-            } catch (IOException e) {
-                throw PortainerConnections.abort(
-                        log, "Manifest operation failed: " + PortainerConnections.truncateMessage(e), e);
-            }
+            deployAndSummarize(client, connection, apiKey, inputs, gitAuth, log, startedNs);
+        }
+    }
 
+    private ManifestParsedInputs parseManifestInputs(EnvVars buildEnv, PortainerBuildLogger log)
+            throws AbortException {
+        final String expandedNamespace = PortainerConnections.abortOn(log, () -> {
+            PortainerStackName.requireValidOptional(stackName);
+            return resolveNamespace(namespace, buildEnv);
+        });
+        final int endpoint = PortainerConnections.abortOn(
+                log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
+
+        final boolean yamlMode = StackSource.isYaml(getStackSource());
+        if (yamlMode) {
+            return parseYamlInputs(log, expandedNamespace, endpoint);
+        }
+        return parseGitInputs(buildEnv, log, expandedNamespace, endpoint);
+    }
+
+    private ManifestParsedInputs parseYamlInputs(
+            PortainerBuildLogger log, String namespace, int endpoint) throws AbortException {
+        String yamlContent = stackFileContent;
+        if (yamlContent == null || yamlContent.isBlank()) {
+            throw PortainerConnections.abort(log, "Manifest YAML content is required for Manual YAML source.");
+        }
+        final String validated = yamlContent;
+        PortainerConnections.abortOn(log, () -> {
+            requireLooksLikeYaml(validated);
+            return null;
+        });
+        return ManifestParsedInputs.yaml(namespace, endpoint, validated);
+    }
+
+    private ManifestParsedInputs parseGitInputs(
+            EnvVars buildEnv, PortainerBuildLogger log, String namespace, int endpoint)
+            throws AbortException {
+        String repoUrl = PortainerConnections.abortOn(log, () -> GitRepositoryUrl.normalize(repositoryUrl));
+        String manifestPath = PortainerConnections.abortOn(log, () -> PortainerComposePath.normalize(
+                manifestFilePath == null || manifestFilePath.isBlank()
+                        ? DEFAULT_MANIFEST_FILE
+                        : buildEnv.expand(manifestFilePath)));
+        String gitRef = PortainerStackBuilder.resolveRepositoryReference(repositoryReferenceName, buildEnv);
+        return ManifestParsedInputs.git(namespace, endpoint, repoUrl, gitRef, manifestPath);
+    }
+
+    private void logManifestPlan(
+            PortainerBuildLogger log, ResolvedConnection connection, ManifestParsedInputs inputs) {
+        PortainerBuildLogger.debugPortainerStart(log, connection, inputs.endpoint, null);
+        log.info("Manifest name=" + stackName + " namespace=" + inputs.namespace);
+        if (inputs.yamlMode) {
+            log.debug("yamlLength=" + inputs.yamlContent.length()
+                    + " yamlHash=" + PortainerConnections.shortContentHash(inputs.yamlContent));
+        }
+    }
+
+    private void finishValidateOnly(
+            PortainerBuildLogger log, long startedNs, ManifestParsedInputs inputs) {
+        log.info("Validate-only — skipping deploy");
+        if (ensureNamespace) {
+            log.debug("Would ensure namespace=" + inputs.namespace);
+        }
+        log.debug("Would create-or-update manifest from "
+                + (inputs.yamlMode ? "YAML" : "Git")
+                + " name=" + stackName
+                + " namespace=" + inputs.namespace);
+        summarize(log, startedNs, "validated", -1);
+    }
+
+    private void deployAndSummarize(
+            PortainerClient client,
+            ResolvedConnection connection,
+            String apiKey,
+            ManifestParsedInputs inputs,
+            PortainerCredentials.GitAuth gitAuth,
+            PortainerBuildLogger log,
+            long startedNs) throws AbortException, IOException {
+        try {
+            if (ensureNamespace) {
+                KubernetesNamespaces.ensure(
+                        client, connection, apiKey, inputs.endpoint, inputs.namespace, log);
+            }
+            int existingId = resolveExistingStackId(client, connection, apiKey, inputs.endpoint, log);
+            final DeployOutcome deploy;
+            if (inputs.yamlMode) {
+                deploy = deployYaml(
+                        client,
+                        connection,
+                        apiKey,
+                        inputs.endpoint,
+                        existingId,
+                        inputs.yamlContent,
+                        inputs.namespace);
+            } else {
+                deploy = deployGit(
+                        client,
+                        connection,
+                        apiKey,
+                        inputs.endpoint,
+                        existingId,
+                        new ManifestGitDeployParams(
+                                inputs.repoUrl,
+                                inputs.manifestPath,
+                                inputs.gitRef,
+                                gitAuth,
+                                inputs.namespace));
+            }
             summarize(log, startedNs, deploy.outcome, deploy.stackId);
+        } catch (AbortException e) {
+            throw e;
+        } catch (IOException e) {
+            throw PortainerConnections.abort(
+                    log, "Manifest operation failed: " + PortainerConnections.truncateMessage(e), e);
         }
     }
 
@@ -456,11 +499,7 @@ public class PortainerManifestBuilder extends Builder implements SimpleBuildStep
             String apiKey,
             int endpoint,
             int existingId,
-            String repoUrl,
-            String manifestPath,
-            String gitRef,
-            PortainerCredentials.GitAuth gitAuth,
-            String namespace) throws IOException {
+            ManifestGitDeployParams params) throws IOException {
         if (existingId < 0) {
             JsonNode created = client.createKubernetesStackFromRepository(
                     connection.baseUrl,
@@ -468,12 +507,12 @@ public class PortainerManifestBuilder extends Builder implements SimpleBuildStep
                     endpoint,
                     new PortainerClient.KubernetesFromGitRequest(
                             stackName,
-                            repoUrl,
-                            manifestPath,
-                            gitRef,
-                            namespace,
-                            gitAuth == null ? null : gitAuth.username,
-                            gitAuth == null ? null : gitAuth.password));
+                            params.repoUrl,
+                            params.manifestPath,
+                            params.gitRef,
+                            params.namespace,
+                            params.gitAuth == null ? null : params.gitAuth.username,
+                            params.gitAuth == null ? null : params.gitAuth.password));
             return new DeployOutcome(
                     "created",
                     resolveCreatedStackId(client, connection, apiKey, endpoint, created));
@@ -484,9 +523,9 @@ public class PortainerManifestBuilder extends Builder implements SimpleBuildStep
                 existingId,
                 endpoint,
                 new PortainerClient.KubernetesGitUpdateRequest(
-                        gitRef,
-                        gitAuth == null ? null : gitAuth.username,
-                        gitAuth == null ? null : gitAuth.password));
+                        params.gitRef,
+                        params.gitAuth == null ? null : params.gitAuth.username,
+                        params.gitAuth == null ? null : params.gitAuth.password));
         return new DeployOutcome("updated", existingId);
     }
 
@@ -527,6 +566,64 @@ public class PortainerManifestBuilder extends Builder implements SimpleBuildStep
                 content,
                 "Manifest YAML content is required.",
                 "Manifest content does not look like YAML (expected ':' or '---').");
+    }
+
+    private static final class ManifestParsedInputs {
+        final String namespace;
+        final int endpoint;
+        final boolean yamlMode;
+        final String yamlContent;
+        final String repoUrl;
+        final String gitRef;
+        final String manifestPath;
+
+        private ManifestParsedInputs(
+                String namespace,
+                int endpoint,
+                boolean yamlMode,
+                String yamlContent,
+                String repoUrl,
+                String gitRef,
+                String manifestPath) {
+            this.namespace = namespace;
+            this.endpoint = endpoint;
+            this.yamlMode = yamlMode;
+            this.yamlContent = yamlContent;
+            this.repoUrl = repoUrl;
+            this.gitRef = gitRef;
+            this.manifestPath = manifestPath;
+        }
+
+        static ManifestParsedInputs yaml(String namespace, int endpoint, String yamlContent) {
+            return new ManifestParsedInputs(namespace, endpoint, true, yamlContent, null, null, null);
+        }
+
+        static ManifestParsedInputs git(
+                String namespace, int endpoint, String repoUrl, String gitRef, String manifestPath) {
+            return new ManifestParsedInputs(
+                    namespace, endpoint, false, null, repoUrl, gitRef, manifestPath);
+        }
+    }
+
+    private static final class ManifestGitDeployParams {
+        final String repoUrl;
+        final String manifestPath;
+        final String gitRef;
+        final PortainerCredentials.GitAuth gitAuth;
+        final String namespace;
+
+        ManifestGitDeployParams(
+                String repoUrl,
+                String manifestPath,
+                String gitRef,
+                PortainerCredentials.GitAuth gitAuth,
+                String namespace) {
+            this.repoUrl = repoUrl;
+            this.manifestPath = manifestPath;
+            this.gitRef = gitRef;
+            this.gitAuth = gitAuth;
+            this.namespace = namespace;
+        }
     }
 
     @Symbol("portainerManifest")

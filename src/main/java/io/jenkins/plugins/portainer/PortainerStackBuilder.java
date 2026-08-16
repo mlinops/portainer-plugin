@@ -423,51 +423,8 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             EnvVars buildEnv,
             PortainerBuildLogger log) throws InterruptedException, IOException {
         long startedNs = System.nanoTime();
-
-        final String type = PortainerConnections.abortOn(log, () -> {
-            String t = normalizeStackType(stackType);
-            PortainerStackName.requireValid(stackName);
-            return t;
-        });
-        final int endpoint = PortainerConnections.abortOn(
-                log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
-
-        final boolean yamlMode = StackSource.isYaml(getStackSource());
-        final String yamlContent;
-        final String repoUrl;
-        final String gitRef;
-        final String compose;
-        if (yamlMode) {
-            yamlContent = stackFileContent;
-            if (yamlContent == null || yamlContent.isBlank()) {
-                throw PortainerConnections.abort(log, "Stack YAML content is required for Manual YAML source.");
-            }
-            PortainerConnections.abortOn(log, () -> {
-                ComposeYamlValidator.requireValid(yamlContent);
-                return null;
-            });
-            repoUrl = null;
-            gitRef = null;
-            compose = null;
-        } else {
-            yamlContent = null;
-            repoUrl = PortainerConnections.abortOn(log, () -> GitRepositoryUrl.normalize(repositoryUrl));
-            gitRef = resolveRepositoryReference(repositoryReferenceName, buildEnv);
-            compose = PortainerConnections.abortOn(log, () -> PortainerComposePath.normalize(
-                    composeFilePath == null || composeFilePath.isBlank()
-                            ? DEFAULT_COMPOSE_FILE
-                            : buildEnv.expand(composeFilePath)));
-        }
-
-        List<PortainerClient.EnvPair> envPairs = PortainerConnections.abortOn(log, () -> {
-            List<PortainerClient.EnvPair> parsed = PortainerEnvParser.parse(env);
-            List<PortainerClient.EnvPair> expanded = new ArrayList<>(parsed.size());
-            for (PortainerClient.EnvPair pair : parsed) {
-                String value = pair.value == null ? "" : buildEnv.expand(pair.value);
-                expanded.add(new PortainerClient.EnvPair(pair.name, value));
-            }
-            return expanded;
-        });
+        StackParsedInputs inputs = parseStackInputs(buildEnv, log);
+        List<PortainerClient.EnvPair> envPairs = parseExpandedEnv(buildEnv, log);
 
         PortainerGlobalConfiguration cfg = PortainerGlobalConfiguration.get();
         final PortainerConnections.Authenticated auth = PortainerConnections.resolveAuthenticated(
@@ -482,128 +439,262 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         Item item = run.getParent();
 
         PortainerCredentials.GitAuth gitAuth = null;
-        if (!yamlMode) {
+        if (!inputs.yamlMode) {
             gitAuth = PortainerConnections.resolveOptionalGitAuth(gitCredentialsId, item, log);
         }
 
         String vaultModeLabel = vaultModeLabelForLog(buildEnv);
-        VaultFields vaultFields = null;
-        if (!"off".equals(vaultModeLabel)) {
-            vaultFields = PortainerConnections.abortOn(
-                    log,
-                    () -> VaultFields.parse(
-                            vaultPath, vaultMount, vaultVersion, vaultNamespace, vaultUrl, buildEnv));
-        }
+        VaultFields vaultFields = resolveVaultFieldsIfNeeded(vaultModeLabel, buildEnv, log);
 
-        // Portainer → Git → Vault → mutate
-        PortainerBuildLogger.debugPortainerStart(
-                log,
-                connection,
-                endpoint,
-                "prune=" + prune + " pullImage=" + repullImageAndRedeploy);
-        log.info("Stack name=" + stackName + " type=" + type);
-        if (yamlMode) {
-            log.debug("yamlLength=" + yamlContent.length()
-                    + " yamlHash=" + PortainerConnections.shortContentHash(yamlContent));
-        }
+        logStackPlan(log, connection, inputs);
 
         try (PortainerClient client = new PortainerClient(
                 connection.connectTimeoutMs, connection.readTimeoutMs, log)) {
-
-            PortainerConnections.runPreflight(client, connection, apiKey, endpoint, false, log);
-
-            if (!yamlMode) {
-                PortainerBuildLogger.logGitPreflight(log, gitRef, repoUrl, null, null, compose, null);
+            PortainerConnections.runPreflight(client, connection, apiKey, inputs.endpoint, false, log);
+            if (!inputs.yamlMode) {
+                PortainerBuildLogger.logGitPreflight(
+                        log, inputs.gitRef, inputs.repoUrl, null, null, inputs.compose, null);
             }
+            runVaultPreflight(connection, vaultFields, run, buildEnv, item, log);
 
-            if (vaultFields != null && nonBlank(vaultFields.pathRaw)) {
-                log.debug(PortainerBuildLogger.formatVaultConnection(
-                        getVaultConnectionMode(),
-                        vaultFields.pathRaw,
-                        vaultFields.mount,
-                        vaultFields.version));
-            }
-            VaultConnections.runPreflight(new VaultConnections.Request(
-                    getVaultConnectionMode(),
-                    false,
-                    vaultUrl,
-                    vaultAppRoleCredentialsId,
-                    vaultPath,
-                    vaultNamespace,
-                    run,
-                    buildEnv,
-                    item,
-                    connection.connectTimeoutMs,
-                    connection.readTimeoutMs,
-                    log));
-
-            log.info("Ensuring stack");
-            final int existingId;
-            try {
-                existingId = client.findStackIdByName(connection.baseUrl, apiKey, stackName, endpoint);
-            } catch (IOException e) {
-                throw PortainerConnections.abort(
-                        log, "Stack lookup failed: " + PortainerConnections.truncateMessage(e), e);
-            }
-            if (existingId >= 0) {
-                log.debug("Stack id=" + existingId + " already exists");
-            } else {
-                log.debug("Stack not found by name");
-            }
+            int existingId = resolveExistingStackId(client, connection, apiKey, inputs.endpoint, log);
 
             if (validateOnly) {
-                log.info("Validate-only — skipping deploy");
-                log.debug("Would "
-                        + (existingId >= 0 ? "update" : "create")
-                        + " stack name=" + stackName
-                        + " type=" + type
-                        + " source=" + (yamlMode ? "yaml" : "git")
-                        + " envKeys=" + envPairs.size()
-                        + " vault=" + vaultModeLabel);
-                summarize(log, startedNs, "validated", existingId);
+                finishValidateOnly(log, startedNs, inputs, existingId, envPairs, vaultModeLabel);
                 return;
             }
 
-            int stepKeyCount = envPairs == null ? 0 : envPairs.size();
-            int existingKeyCount = 0;
-            if (isMergeEnvWithExisting() && existingId >= 0) {
-                try {
-                    List<PortainerClient.EnvPair> existingEnv =
-                            client.getStackEnv(connection.baseUrl, apiKey, existingId);
-                    existingKeyCount = existingEnv.size();
-                    envPairs = PortainerEnvMerge.overlay(existingEnv, envPairs);
-                    log.debug("Merged existing stack env keys=" + existingKeyCount
-                            + " with step keys=" + stepKeyCount);
-                } catch (IOException e) {
-                    throw PortainerConnections.abort(
-                            log, "Load stack env failed: " + PortainerConnections.truncateMessage(e), e);
-                }
-            }
+            deployAndSummarize(
+                    client,
+                    connection,
+                    apiKey,
+                    new StackDeployRequest(
+                            inputs, existingId, envPairs, gitAuth, run, buildEnv, item, vaultFields),
+                    log,
+                    startedNs);
+        }
+    }
 
-            Map<String, String> vaultOverlay =
-                    resolveVaultOverlay(run, buildEnv, item, connection, vaultFields, log);
-            int vaultKeyCount = vaultOverlay == null ? 0 : vaultOverlay.size();
-            envPairs = PortainerEnvMerge.merge(envPairs, vaultOverlay);
-            logEnvKeys(log, envPairs, existingKeyCount, stepKeyCount, vaultKeyCount);
+    private StackParsedInputs parseStackInputs(EnvVars buildEnv, PortainerBuildLogger log)
+            throws AbortException {
+        final String type = PortainerConnections.abortOn(log, () -> {
+            String t = normalizeStackType(stackType);
+            PortainerStackName.requireValid(stackName);
+            return t;
+        });
+        final int endpoint = PortainerConnections.abortOn(
+                log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
+        if (StackSource.isYaml(getStackSource())) {
+            return parseYamlInputs(log, type, endpoint);
+        }
+        return parseGitInputs(buildEnv, log, type, endpoint);
+    }
+
+    private StackParsedInputs parseYamlInputs(PortainerBuildLogger log, String type, int endpoint)
+            throws AbortException {
+        String yamlContent = stackFileContent;
+        if (yamlContent == null || yamlContent.isBlank()) {
+            throw PortainerConnections.abort(log, "Stack YAML content is required for Manual YAML source.");
+        }
+        final String validated = yamlContent;
+        PortainerConnections.abortOn(log, () -> {
+            ComposeYamlValidator.requireValid(validated);
+            return null;
+        });
+        return StackParsedInputs.yaml(type, endpoint, validated);
+    }
+
+    private StackParsedInputs parseGitInputs(
+            EnvVars buildEnv, PortainerBuildLogger log, String type, int endpoint)
+            throws AbortException {
+        String repoUrl = PortainerConnections.abortOn(log, () -> GitRepositoryUrl.normalize(repositoryUrl));
+        String gitRef = resolveRepositoryReference(repositoryReferenceName, buildEnv);
+        String compose = PortainerConnections.abortOn(log, () -> PortainerComposePath.normalize(
+                composeFilePath == null || composeFilePath.isBlank()
+                        ? DEFAULT_COMPOSE_FILE
+                        : buildEnv.expand(composeFilePath)));
+        return StackParsedInputs.git(type, endpoint, repoUrl, gitRef, compose);
+    }
+
+    private List<PortainerClient.EnvPair> parseExpandedEnv(EnvVars buildEnv, PortainerBuildLogger log)
+            throws AbortException {
+        return PortainerConnections.abortOn(log, () -> {
+            List<PortainerClient.EnvPair> parsed = PortainerEnvParser.parse(env);
+            List<PortainerClient.EnvPair> expanded = new ArrayList<>(parsed.size());
+            for (PortainerClient.EnvPair pair : parsed) {
+                String value = pair.value == null ? "" : buildEnv.expand(pair.value);
+                expanded.add(new PortainerClient.EnvPair(pair.name, value));
+            }
+            return expanded;
+        });
+    }
+
+    private VaultFields resolveVaultFieldsIfNeeded(
+            String vaultModeLabel, EnvVars buildEnv, PortainerBuildLogger log) throws AbortException {
+        if ("off".equals(vaultModeLabel)) {
+            return null;
+        }
+        return PortainerConnections.abortOn(
+                log,
+                () -> VaultFields.parse(
+                        vaultPath, vaultMount, vaultVersion, vaultNamespace, vaultUrl, buildEnv));
+    }
+
+    private void logStackPlan(
+            PortainerBuildLogger log, ResolvedConnection connection, StackParsedInputs inputs) {
+        PortainerBuildLogger.debugPortainerStart(
+                log,
+                connection,
+                inputs.endpoint,
+                "prune=" + prune + " pullImage=" + repullImageAndRedeploy);
+        log.info("Stack name=" + stackName + " type=" + inputs.type);
+        if (inputs.yamlMode) {
+            log.debug("yamlLength=" + inputs.yamlContent.length()
+                    + " yamlHash=" + PortainerConnections.shortContentHash(inputs.yamlContent));
+        }
+    }
+
+    private void runVaultPreflight(
+            ResolvedConnection connection,
+            VaultFields vaultFields,
+            Run<?, ?> run,
+            EnvVars buildEnv,
+            Item item,
+            PortainerBuildLogger log) throws AbortException {
+        if (vaultFields != null && nonBlank(vaultFields.pathRaw)) {
+            log.debug(PortainerBuildLogger.formatVaultConnection(
+                    getVaultConnectionMode(),
+                    vaultFields.pathRaw,
+                    vaultFields.mount,
+                    vaultFields.version));
+        }
+        VaultConnections.runPreflight(new VaultConnections.Request(
+                getVaultConnectionMode(),
+                false,
+                vaultUrl,
+                vaultAppRoleCredentialsId,
+                vaultPath,
+                vaultNamespace,
+                run,
+                buildEnv,
+                item,
+                connection.connectTimeoutMs,
+                connection.readTimeoutMs,
+                log));
+    }
+
+    private int resolveExistingStackId(
+            PortainerClient client,
+            ResolvedConnection connection,
+            String apiKey,
+            int endpoint,
+            PortainerBuildLogger log) throws AbortException {
+        log.info("Ensuring stack");
+        final int existingId;
+        try {
+            existingId = client.findStackIdByName(connection.baseUrl, apiKey, stackName, endpoint);
+        } catch (IOException e) {
+            throw PortainerConnections.abort(
+                    log, "Stack lookup failed: " + PortainerConnections.truncateMessage(e), e);
+        }
+        if (existingId >= 0) {
+            log.debug("Stack id=" + existingId + " already exists");
+        } else {
+            log.debug("Stack not found by name");
+        }
+        return existingId;
+    }
+
+    private void finishValidateOnly(
+            PortainerBuildLogger log,
+            long startedNs,
+            StackParsedInputs inputs,
+            int existingId,
+            List<PortainerClient.EnvPair> envPairs,
+            String vaultModeLabel) {
+        log.info("Validate-only — skipping deploy");
+        log.debug("Would "
+                + (existingId >= 0 ? "update" : "create")
+                + " stack name=" + stackName
+                + " type=" + inputs.type
+                + " source=" + (inputs.yamlMode ? "yaml" : "git")
+                + " envKeys=" + envPairs.size()
+                + " vault=" + vaultModeLabel);
+        summarize(log, startedNs, "validated", existingId);
+    }
+
+    private void deployAndSummarize(
+            PortainerClient client,
+            ResolvedConnection connection,
+            String apiKey,
+            StackDeployRequest req,
+            PortainerBuildLogger log,
+            long startedNs) throws AbortException {
+        try {
+            MergedEnv merged = mergeEnvWithExisting(
+                    client, connection, apiKey, req.existingId, req.envPairs, log);
+            Map<String, String> vaultOverlay = resolveVaultOverlay(
+                    req.run, req.buildEnv, req.item, connection, req.vaultFields, log);
+            int vaultKeyCount = vaultOverlay.size();
+            List<PortainerClient.EnvPair> finalEnv = PortainerEnvMerge.merge(merged.envPairs, vaultOverlay);
+            logEnvKeys(log, finalEnv, merged.existingKeyCount, merged.stepKeyCount, vaultKeyCount);
 
             final DeployOutcome deploy;
-            try {
-                if (yamlMode) {
-                    deploy = deployFromYaml(
-                            client, connection, apiKey, endpoint, type, existingId, yamlContent, envPairs);
-                } else {
-                    deploy = deployFromGit(
-                            client, connection, apiKey, endpoint, type, existingId,
-                            repoUrl, compose, gitRef, gitAuth, envPairs);
-                }
-            } catch (AbortException e) {
-                throw e;
-            } catch (IOException e) {
-                String summary = "Stack operation failed: " + PortainerConnections.truncateMessage(e);
-                throw PortainerConnections.abort(log, summary, e);
+            if (req.inputs.yamlMode) {
+                deploy = deployFromYaml(
+                        client,
+                        connection,
+                        apiKey,
+                        req.inputs.endpoint,
+                        req.inputs.type,
+                        req.existingId,
+                        new StackYamlDeployParams(req.inputs.yamlContent, finalEnv));
+            } else {
+                deploy = deployFromGit(
+                        client,
+                        connection,
+                        apiKey,
+                        req.inputs.endpoint,
+                        req.inputs.type,
+                        req.existingId,
+                        new StackGitDeployParams(
+                                req.inputs.repoUrl,
+                                req.inputs.compose,
+                                req.inputs.gitRef,
+                                req.gitAuth,
+                                finalEnv));
             }
-
             summarize(log, startedNs, deploy.outcome, deploy.stackId);
+        } catch (AbortException e) {
+            throw e;
+        } catch (IOException e) {
+            String summary = "Stack operation failed: " + PortainerConnections.truncateMessage(e);
+            throw PortainerConnections.abort(log, summary, e);
+        }
+    }
+
+    private MergedEnv mergeEnvWithExisting(
+            PortainerClient client,
+            ResolvedConnection connection,
+            String apiKey,
+            int existingId,
+            List<PortainerClient.EnvPair> envPairs,
+            PortainerBuildLogger log) throws AbortException {
+        int stepKeyCount = envPairs == null ? 0 : envPairs.size();
+        if (!isMergeEnvWithExisting() || existingId < 0) {
+            return new MergedEnv(envPairs, 0, stepKeyCount);
+        }
+        try {
+            List<PortainerClient.EnvPair> existingEnv =
+                    client.getStackEnv(connection.baseUrl, apiKey, existingId);
+            int existingKeyCount = existingEnv.size();
+            List<PortainerClient.EnvPair> overlaid = PortainerEnvMerge.overlay(existingEnv, envPairs);
+            log.debug("Merged existing stack env keys=" + existingKeyCount
+                    + " with step keys=" + stepKeyCount);
+            return new MergedEnv(overlaid, existingKeyCount, stepKeyCount);
+        } catch (IOException e) {
+            throw PortainerConnections.abort(
+                    log, "Load stack env failed: " + PortainerConnections.truncateMessage(e), e);
         }
     }
 
@@ -629,20 +720,16 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             int endpoint,
             String type,
             int existingId,
-            String repoUrl,
-            String compose,
-            String gitRef,
-            PortainerCredentials.GitAuth gitAuth,
-            List<PortainerClient.EnvPair> envPairs) throws IOException {
+            StackGitDeployParams params) throws IOException {
         if (existingId < 0) {
             PortainerClient.StackFromGitRequest req = new PortainerClient.StackFromGitRequest(
                     stackName,
-                    repoUrl,
-                    compose,
-                    gitRef,
-                    gitAuth == null ? null : gitAuth.username,
-                    gitAuth == null ? null : gitAuth.password,
-                    envPairs);
+                    params.repoUrl,
+                    params.compose,
+                    params.gitRef,
+                    params.gitAuth == null ? null : params.gitAuth.username,
+                    params.gitAuth == null ? null : params.gitAuth.password,
+                    params.envPairs);
             JsonNode created;
             if (TYPE_SWARM.equals(type)) {
                 created = client.createSwarmStackFromRepository(
@@ -655,12 +742,12 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             return new DeployOutcome("created", id);
         }
         PortainerClient.GitRedeployRequest req = new PortainerClient.GitRedeployRequest(
-                envPairs,
+                params.envPairs,
                 prune,
                 repullImageAndRedeploy,
-                gitRef,
-                gitAuth == null ? null : gitAuth.username,
-                gitAuth == null ? null : gitAuth.password);
+                params.gitRef,
+                params.gitAuth == null ? null : params.gitAuth.username,
+                params.gitAuth == null ? null : params.gitAuth.password);
         client.gitRedeploy(connection.baseUrl, apiKey, existingId, endpoint, req);
         return new DeployOutcome("updated", existingId);
     }
@@ -672,11 +759,11 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             int endpoint,
             String type,
             int existingId,
-            String yamlContent,
-            List<PortainerClient.EnvPair> envPairs) throws IOException {
+            StackYamlDeployParams params) throws IOException {
         if (existingId < 0) {
             PortainerClient.StackFromStringRequest req =
-                    new PortainerClient.StackFromStringRequest(stackName, yamlContent, envPairs);
+                    new PortainerClient.StackFromStringRequest(
+                            stackName, params.yamlContent, params.envPairs);
             JsonNode created;
             if (TYPE_SWARM.equals(type)) {
                 created = client.createSwarmStackFromString(
@@ -689,7 +776,7 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             return new DeployOutcome("created", id);
         }
         PortainerClient.StackFileUpdateRequest req = new PortainerClient.StackFileUpdateRequest(
-                yamlContent, envPairs, prune, repullImageAndRedeploy);
+                params.yamlContent, params.envPairs, prune, repullImageAndRedeploy);
         client.updateStackFileContent(connection.baseUrl, apiKey, existingId, endpoint, req);
         return new DeployOutcome("updated", existingId);
     }
@@ -721,8 +808,8 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     }
 
     /**
-     * Optional Vault KV v2 overlay. Returns {@code null} when Vault is off
-     * ({@link #MODE_NONE}) or when Inherit/Manual have an empty path (legacy soft-skip).
+     * Optional Vault KV v2 overlay. Never {@code null}: empty map when Vault is off
+     * ({@link #MODE_NONE}) or when Inherit/Manual have an empty path (soft-skip).
      * Never logs secret values, role_id, secret_id, or tokens.
      */
     Map<String, String> resolveVaultOverlay(
@@ -739,15 +826,13 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
                 ? PortainerGlobalConfiguration.DEFAULT_READ_TIMEOUT_MS
                 : connection.readTimeoutMs;
         return VaultKv.resolve(new VaultKv.Request(
-                VaultKv.Policy.OPTIONAL_SOFT_SKIP,
-                getVaultConnectionMode(),
-                fields,
-                vaultAppRoleCredentialsId,
-                run,
-                buildEnv,
-                item,
-                connectMs,
-                readMs,
+                new VaultKv.Request.VaultSpec(
+                        VaultKv.Policy.OPTIONAL_SOFT_SKIP,
+                        getVaultConnectionMode(),
+                        fields,
+                        vaultAppRoleCredentialsId),
+                new VaultKv.Request.RunContext(run, buildEnv, item),
+                new VaultKv.Request.Timeouts(connectMs, readMs),
                 log));
     }
 
@@ -792,6 +877,115 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             throw new AbortException("Stack type must be 'compose' or 'swarm' (got '" + raw.trim() + "').");
         }
         return t;
+    }
+
+    private static final class StackParsedInputs {
+        final String type;
+        final int endpoint;
+        final boolean yamlMode;
+        final String yamlContent;
+        final String repoUrl;
+        final String gitRef;
+        final String compose;
+
+        private StackParsedInputs(
+                String type,
+                int endpoint,
+                boolean yamlMode,
+                String yamlContent,
+                String repoUrl,
+                String gitRef,
+                String compose) {
+            this.type = type;
+            this.endpoint = endpoint;
+            this.yamlMode = yamlMode;
+            this.yamlContent = yamlContent;
+            this.repoUrl = repoUrl;
+            this.gitRef = gitRef;
+            this.compose = compose;
+        }
+
+        static StackParsedInputs yaml(String type, int endpoint, String yamlContent) {
+            return new StackParsedInputs(type, endpoint, true, yamlContent, null, null, null);
+        }
+
+        static StackParsedInputs git(
+                String type, int endpoint, String repoUrl, String gitRef, String compose) {
+            return new StackParsedInputs(type, endpoint, false, null, repoUrl, gitRef, compose);
+        }
+    }
+
+    private static final class StackGitDeployParams {
+        final String repoUrl;
+        final String compose;
+        final String gitRef;
+        final PortainerCredentials.GitAuth gitAuth;
+        final List<PortainerClient.EnvPair> envPairs;
+
+        StackGitDeployParams(
+                String repoUrl,
+                String compose,
+                String gitRef,
+                PortainerCredentials.GitAuth gitAuth,
+                List<PortainerClient.EnvPair> envPairs) {
+            this.repoUrl = repoUrl;
+            this.compose = compose;
+            this.gitRef = gitRef;
+            this.gitAuth = gitAuth;
+            this.envPairs = envPairs;
+        }
+    }
+
+    private static final class StackYamlDeployParams {
+        final String yamlContent;
+        final List<PortainerClient.EnvPair> envPairs;
+
+        StackYamlDeployParams(String yamlContent, List<PortainerClient.EnvPair> envPairs) {
+            this.yamlContent = yamlContent;
+            this.envPairs = envPairs;
+        }
+    }
+
+    private static final class StackDeployRequest {
+        final StackParsedInputs inputs;
+        final int existingId;
+        final List<PortainerClient.EnvPair> envPairs;
+        final PortainerCredentials.GitAuth gitAuth;
+        final Run<?, ?> run;
+        final EnvVars buildEnv;
+        final Item item;
+        final VaultFields vaultFields;
+
+        StackDeployRequest(
+                StackParsedInputs inputs,
+                int existingId,
+                List<PortainerClient.EnvPair> envPairs,
+                PortainerCredentials.GitAuth gitAuth,
+                Run<?, ?> run,
+                EnvVars buildEnv,
+                Item item,
+                VaultFields vaultFields) {
+            this.inputs = inputs;
+            this.existingId = existingId;
+            this.envPairs = envPairs;
+            this.gitAuth = gitAuth;
+            this.run = run;
+            this.buildEnv = buildEnv;
+            this.item = item;
+            this.vaultFields = vaultFields;
+        }
+    }
+
+    private static final class MergedEnv {
+        final List<PortainerClient.EnvPair> envPairs;
+        final int existingKeyCount;
+        final int stepKeyCount;
+
+        MergedEnv(List<PortainerClient.EnvPair> envPairs, int existingKeyCount, int stepKeyCount) {
+            this.envPairs = envPairs;
+            this.existingKeyCount = existingKeyCount;
+            this.stepKeyCount = stepKeyCount;
+        }
     }
 
     @Symbol("portainerStack")

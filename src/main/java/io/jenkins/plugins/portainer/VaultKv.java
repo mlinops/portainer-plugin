@@ -6,6 +6,7 @@ import hudson.model.Item;
 import hudson.model.Run;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
 
@@ -14,6 +15,8 @@ import java.util.Map;
  * Does not merge those contracts — {@link Policy} selects path/error behavior.
  */
 final class VaultKv {
+
+    private static final Map<String, String> SKIP_VAULT = Collections.emptyMap();
 
     enum Policy {
         /** Secret step: path required; remap common not-found errors. */
@@ -26,84 +29,91 @@ final class VaultKv {
     }
 
     /**
-     * @return KV data, empty map when Vault returned no keys, or {@code null} only for
-     *         {@link Policy#OPTIONAL_SOFT_SKIP} when Vault is off or path is empty (soft-skip).
+     * @return KV data from Vault; never {@code null}. Empty map means soft-skip under
+     *         {@link Policy#OPTIONAL_SOFT_SKIP} (Vault off / empty path) or a successful read
+     *         with no keys. Callers must treat empty like the former {@code null} (“do not overlay”).
      */
     static Map<String, String> resolve(Request req) throws AbortException {
-        if (req == null || req.log == null) {
-            throw new AbortException("Vault KV resolve requires a build logger.");
-        }
+        requireLog(req);
         String mode = ConnectionMode.normalize(
                 req.mode, req.policy == Policy.REQUIRED ? ConnectionMode.INHERIT : ConnectionMode.NONE);
         if (ConnectionMode.isNone(mode)) {
-            if (req.policy == Policy.REQUIRED) {
-                throw PortainerConnections.abort(req.log, "Vault connection is required.");
-            }
-            return null;
+            return resolveNone(req);
         }
-
         VaultFields fields = req.fields;
-        String appRoleCred = req.appRoleCredentialsId;
-
         if (fields == null || !nonBlank(fields.pathRaw) || fields.path == null) {
-            if (req.policy == Policy.OPTIONAL_SOFT_SKIP) {
-                if (ConnectionMode.isManual(mode)
-                        && fields != null
-                        && (nonBlank(fields.urlRaw) || nonBlank(appRoleCred))) {
-                    throw PortainerConnections.abort(
-                            req.log,
-                            "Vault Manual is partially configured: vaultPath is required "
-                                    + "(or set Vault connection to Not connected / clear vaultUrl "
-                                    + "and vaultAppRoleCredentialsId).");
-                }
-                return null;
-            }
-            throw PortainerConnections.abort(req.log, "Vault path is required.");
+            return resolveMissingPath(req, mode, fields);
         }
-
-        String mount = fields.mount;
-        String path = fields.path;
-        Integer version = fields.version;
-        String namespace = fields.namespace;
-        String urlRaw = fields.urlRaw;
-
         if (req.policy == Policy.OPTIONAL_SOFT_SKIP) {
-            req.log.info(PortainerBuildLogger.formatVaultPath(path, version));
+            req.log.info(PortainerBuildLogger.formatVaultPath(fields.path, fields.version));
         }
-
         if (ConnectionMode.isInherit(mode)) {
-            if (version != null) {
-                req.log.warn("Vault Inherit: vaultVersion is ignored (HashiCorp Vault Plugin reads latest); "
-                        + "use Manual for a specific KV version");
-            }
-            try {
-                return VaultPluginInherit.readKvV2(
-                        req.run, req.buildEnv, mount, path, namespace, req.log.getListener(), req.log);
-            } catch (AbortException e) {
-                if (req.policy == Policy.REQUIRED) {
-                    String msg = e.getMessage() == null ? "" : e.getMessage();
-                    String lower = msg.toLowerCase(Locale.ROOT);
-                    if (lower.contains("not found") || lower.contains("error at path")) {
-                        throw PortainerConnections.abort(req.log, "Vault path not found: " + path);
-                    }
-                }
-                throw PortainerConnections.abort(req.log, e.getMessage());
-            }
+            return readInherit(req, fields);
         }
+        return readManual(req, fields);
+    }
 
-        boolean requiredOk = nonBlank(urlRaw) && nonBlank(appRoleCred);
-        if (!requiredOk) {
-            if (req.policy == Policy.OPTIONAL_SOFT_SKIP) {
+    private static void requireLog(Request req) throws AbortException {
+        if (req == null || req.log == null) {
+            throw new AbortException("Vault KV resolve requires a build logger.");
+        }
+    }
+
+    private static Map<String, String> resolveNone(Request req) throws AbortException {
+        if (req.policy == Policy.REQUIRED) {
+            throw PortainerConnections.abort(req.log, "Vault connection is required.");
+        }
+        return SKIP_VAULT;
+    }
+
+    private static Map<String, String> resolveMissingPath(Request req, String mode, VaultFields fields)
+            throws AbortException {
+        if (req.policy == Policy.OPTIONAL_SOFT_SKIP) {
+            if (ConnectionMode.isManual(mode)
+                    && fields != null
+                    && (nonBlank(fields.urlRaw) || nonBlank(req.appRoleCredentialsId))) {
                 throw PortainerConnections.abort(
                         req.log,
-                        "Vault Manual requires vaultUrl and vaultAppRoleCredentialsId "
-                                + "(Username/Password: role_id / secret_id), plus vaultPath. "
-                                + "Or set Vault connection to Inherit / Not connected.");
+                        "Vault Manual is partially configured: vaultPath is required "
+                                + "(or set Vault connection to Not connected / clear vaultUrl "
+                                + "and vaultAppRoleCredentialsId).");
             }
-            throw PortainerConnections.abort(
-                    req.log,
-                    "Vault Manual requires vaultUrl and vaultAppRoleCredentialsId "
-                            + "(Username/Password: role_id / secret_id), plus vaultPath.");
+            return SKIP_VAULT;
+        }
+        throw PortainerConnections.abort(req.log, "Vault path is required.");
+    }
+
+    private static Map<String, String> readInherit(Request req, VaultFields fields) throws AbortException {
+        if (fields.version != null) {
+            req.log.warn("Vault Inherit: vaultVersion is ignored (HashiCorp Vault Plugin reads latest); "
+                    + "use Manual for a specific KV version");
+        }
+        try {
+            return VaultPluginInherit.readKvV2(
+                    req.run, req.buildEnv, fields.mount, fields.path, fields.namespace,
+                    req.log.getListener(), req.log);
+        } catch (AbortException e) {
+            throw remapInheritAbort(req, fields.path, e);
+        }
+    }
+
+    private static AbortException remapInheritAbort(Request req, String path, AbortException e)
+            throws AbortException {
+        if (req.policy == Policy.REQUIRED) {
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            String lower = msg.toLowerCase(Locale.ROOT);
+            if (lower.contains("not found") || lower.contains("error at path")) {
+                throw PortainerConnections.abort(req.log, "Vault path not found: " + path);
+            }
+        }
+        throw PortainerConnections.abort(req.log, e.getMessage());
+    }
+
+    private static Map<String, String> readManual(Request req, VaultFields fields) throws AbortException {
+        String urlRaw = fields.urlRaw;
+        String appRoleCred = req.appRoleCredentialsId;
+        if (!nonBlank(urlRaw) || !nonBlank(appRoleCred)) {
+            throw abortManualIncomplete(req);
         }
 
         final PortainerCredentials.AppRoleIds appRole;
@@ -120,17 +130,7 @@ final class VaultKv {
             throw PortainerConnections.abort(req.log, e.getMessage());
         }
 
-        StringBuilder debug = new StringBuilder("Vault Manual reading mount=")
-                .append(mount)
-                .append(" path=")
-                .append(path);
-        if (version != null) {
-            debug.append(" version=").append(version);
-        }
-        if (nonBlank(namespace)) {
-            debug.append(" namespace=").append(namespace);
-        }
-        req.log.debug(debug.toString());
+        logManualRead(req, fields);
 
         int connectMs = req.connectTimeoutMs > 0
                 ? req.connectTimeoutMs
@@ -139,23 +139,59 @@ final class VaultKv {
                 ? req.readTimeoutMs
                 : PortainerGlobalConfiguration.DEFAULT_READ_TIMEOUT_MS;
         try (VaultClient vault = new VaultClient(connectMs, readMs, req.log)) {
-            Map<String, String> data = vault.readKvV2(new VaultClient.ReadRequest(
-                    baseUrl, appRole.roleId, appRole.secretId, mount, path, namespace, version));
-            return data;
+            return vault.readKvV2(new VaultClient.ReadRequest(
+                    baseUrl, appRole.roleId, appRole.secretId,
+                    fields.mount, fields.path, fields.namespace, fields.version));
         } catch (IOException e) {
-            String msg = PortainerConnections.truncateMessage(e);
-            if (req.policy == Policy.REQUIRED
-                    && (msg.contains("404") || msg.toLowerCase(Locale.ROOT).contains("not found"))) {
-                throw PortainerConnections.abort(req.log, "Vault path not found: " + path, e);
-            }
-            throw PortainerConnections.abort(req.log, "Vault failed: " + msg, e);
+            throw remapManualIo(req, fields.path, e);
         }
+    }
+
+    private static AbortException abortManualIncomplete(Request req) throws AbortException {
+        if (req.policy == Policy.OPTIONAL_SOFT_SKIP) {
+            throw PortainerConnections.abort(
+                    req.log,
+                    "Vault Manual requires vaultUrl and vaultAppRoleCredentialsId "
+                            + "(Username/Password: role_id / secret_id), plus vaultPath. "
+                            + "Or set Vault connection to Inherit / Not connected.");
+        }
+        throw PortainerConnections.abort(
+                req.log,
+                "Vault Manual requires vaultUrl and vaultAppRoleCredentialsId "
+                        + "(Username/Password: role_id / secret_id), plus vaultPath.");
+    }
+
+    private static void logManualRead(Request req, VaultFields fields) {
+        StringBuilder debug = new StringBuilder("Vault Manual reading mount=")
+                .append(fields.mount)
+                .append(" path=")
+                .append(fields.path);
+        if (fields.version != null) {
+            debug.append(" version=").append(fields.version);
+        }
+        if (nonBlank(fields.namespace)) {
+            debug.append(" namespace=").append(fields.namespace);
+        }
+        req.log.debug(debug.toString());
+    }
+
+    private static AbortException remapManualIo(Request req, String path, IOException e)
+            throws AbortException {
+        String msg = PortainerConnections.truncateMessage(e);
+        if (req.policy == Policy.REQUIRED
+                && (msg.contains("404") || msg.toLowerCase(Locale.ROOT).contains("not found"))) {
+            throw PortainerConnections.abort(req.log, "Vault path not found: " + path, e);
+        }
+        throw PortainerConnections.abort(req.log, "Vault failed: " + msg, e);
     }
 
     private static boolean nonBlank(String value) {
         return value != null && !value.isBlank();
     }
 
+    /**
+     * Vault KV resolve inputs. Prefer {@link #Request(VaultSpec, RunContext, Timeouts, PortainerBuildLogger)}.
+     */
     static final class Request {
         final Policy policy;
         final String mode;
@@ -168,27 +204,56 @@ final class VaultKv {
         final int readTimeoutMs;
         final PortainerBuildLogger log;
 
-        Request(
-                Policy policy,
-                String mode,
-                VaultFields fields,
-                String appRoleCredentialsId,
-                Run<?, ?> run,
-                EnvVars buildEnv,
-                Item item,
-                int connectTimeoutMs,
-                int readTimeoutMs,
-                PortainerBuildLogger log) {
-            this.policy = policy;
-            this.mode = mode;
-            this.fields = fields;
-            this.appRoleCredentialsId = appRoleCredentialsId;
-            this.run = run;
-            this.buildEnv = buildEnv;
-            this.item = item;
-            this.connectTimeoutMs = connectTimeoutMs;
-            this.readTimeoutMs = readTimeoutMs;
+        Request(VaultSpec vault, RunContext runContext, Timeouts timeouts, PortainerBuildLogger log) {
+            this.policy = vault.policy;
+            this.mode = vault.mode;
+            this.fields = vault.fields;
+            this.appRoleCredentialsId = vault.appRoleCredentialsId;
+            this.run = runContext.run;
+            this.buildEnv = runContext.buildEnv;
+            this.item = runContext.item;
+            this.connectTimeoutMs = timeouts.connectTimeoutMs;
+            this.readTimeoutMs = timeouts.readTimeoutMs;
             this.log = log;
+        }
+
+        /** Policy, connection mode, path fields, and AppRole credential id. */
+        static final class VaultSpec {
+            final Policy policy;
+            final String mode;
+            final VaultFields fields;
+            final String appRoleCredentialsId;
+
+            VaultSpec(Policy policy, String mode, VaultFields fields, String appRoleCredentialsId) {
+                this.policy = policy;
+                this.mode = mode;
+                this.fields = fields;
+                this.appRoleCredentialsId = appRoleCredentialsId;
+            }
+        }
+
+        /** Build / job context for Inherit and credential lookup. */
+        static final class RunContext {
+            final Run<?, ?> run;
+            final EnvVars buildEnv;
+            final Item item;
+
+            RunContext(Run<?, ?> run, EnvVars buildEnv, Item item) {
+                this.run = run;
+                this.buildEnv = buildEnv;
+                this.item = item;
+            }
+        }
+
+        /** HTTP timeouts (0 = use global defaults). */
+        static final class Timeouts {
+            final int connectTimeoutMs;
+            final int readTimeoutMs;
+
+            Timeouts(int connectTimeoutMs, int readTimeoutMs) {
+                this.connectTimeoutMs = connectTimeoutMs;
+                this.readTimeoutMs = readTimeoutMs;
+            }
         }
     }
 }
