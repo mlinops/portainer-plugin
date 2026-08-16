@@ -54,7 +54,7 @@ public class PortainerSwarmConfigBuilderTest {
         System.setProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP, "true");
         createCalled.set(false);
         configsListBody.set("[]");
-        GitRepositoryFiles.listTestOverride = null;
+        GitRepositoryFiles.listTestOverride.set(null);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             lastPath.set(exchange.getRequestURI().getPath());
@@ -98,7 +98,7 @@ public class PortainerSwarmConfigBuilderTest {
     @AfterEach
     public void stopServer() {
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
-        GitRepositoryFiles.listTestOverride = null;
+        GitRepositoryFiles.listTestOverride.set(null);
         if (server != null) {
             server.stop(0);
         }
@@ -188,8 +188,7 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_emptyFolder_fails(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        GitRepositoryFiles.listTestOverride =
-                req -> List.of();
+        GitRepositoryFiles.listTestOverride.set(req -> List.of());
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
         step.setRepositoryUrl("https://gitlab.example/group/configs.git");
@@ -302,9 +301,9 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_duplicateBasename_fails(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        GitRepositoryFiles.listTestOverride = req -> List.of(
+        GitRepositoryFiles.listTestOverride.set(req -> List.of(
                 new SwarmConfigFile("app-settings.json", "{\"a\":1}".getBytes(StandardCharsets.UTF_8)),
-                new SwarmConfigFile("app_settings.json", "{\"b\":2}".getBytes(StandardCharsets.UTF_8)));
+                new SwarmConfigFile("app_settings.json", "{\"b\":2}".getBytes(StandardCharsets.UTF_8))));
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
         step.setRepositoryUrl("https://gitlab.example/group/configs.git");
@@ -369,9 +368,9 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_gitPathNotFound_fails(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        GitRepositoryFiles.listTestOverride = req -> {
+        GitRepositoryFiles.listTestOverride.set(req -> {
             throw new IOException("Config path not found: missing");
-        };
+        });
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
         step.setRepositoryUrl("https://gitlab.example/group/configs.git");
@@ -414,7 +413,7 @@ public class PortainerSwarmConfigBuilderTest {
     }
 
     private static void stubGitFiles() {
-        GitRepositoryFiles.listTestOverride = req -> List.of(
+        GitRepositoryFiles.listTestOverride.set(req -> List.of(
                 new SwarmConfigFile("app-settings.json", "{\"a\":1}".getBytes(StandardCharsets.UTF_8)));
     }
 

@@ -170,10 +170,22 @@ class VaultPluginInheritTest {
         m.setAccessible(true);
         m.invoke(null, null, "secret/app", 2, null);
 
-        PortainerBuildLogger log = quietLog();
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        StreamTaskListener listener = new StreamTaskListener(buf, StandardCharsets.UTF_8);
+        PortainerBuildLogger log =
+                new PortainerBuildLogger(Logger.getLogger("VaultPluginInheritTest"), listener, true);
+
         m.invoke(null, log, "secret/app", Integer.valueOf(2), null);
         m.invoke(null, log, "secret/app", Integer.valueOf(2), "  ");
+        String withoutNs = buf.toString(StandardCharsets.UTF_8);
+        assertTrue(withoutNs.contains("Vault Inherit reading path=secret/app engineVersion=2"));
+        assertFalse(withoutNs.contains("namespace="));
+
+        buf.reset();
         m.invoke(null, log, "secret/app", Integer.valueOf(2), "  ns1  ");
+        String withNs = buf.toString(StandardCharsets.UTF_8);
+        assertTrue(withNs.contains(
+                "Vault Inherit reading path=secret/app engineVersion=2 namespace=ns1"));
     }
 
     @Test

@@ -758,32 +758,51 @@ final class PortainerClient implements AutoCloseable {
                         "secret", "secrets", "create secret", request.name, request.data, request.labels));
     }
 
-    /** Docker Swarm config/secret create payload for the Portainer proxy. */
-    private record DockerNamedResourceCreate(
-            String kind,
-            String dockerPathSegment,
-            String debugNote,
-            String name,
-            byte[] data,
-            Map<String, String> labels) {}
+    /**
+     * Docker Swarm config/secret create payload for the Portainer proxy.
+     * Not a record: {@code byte[]} would use reference equality in generated equals/hashCode.
+     */
+    private static final class DockerNamedResourceCreate {
+        final String kind;
+        final String dockerPathSegment;
+        final String debugNote;
+        final String name;
+        final byte[] data;
+        final Map<String, String> labels;
+
+        DockerNamedResourceCreate(
+                String kind,
+                String dockerPathSegment,
+                String debugNote,
+                String name,
+                byte[] data,
+                Map<String, String> labels) {
+            this.kind = kind;
+            this.dockerPathSegment = dockerPathSegment;
+            this.debugNote = debugNote;
+            this.name = name;
+            this.data = data;
+            this.labels = labels;
+        }
+    }
 
     private JsonNode createDockerNamedResource(
             String baseUrl, String apiKey, int endpointId, DockerNamedResourceCreate create)
             throws IOException {
-        if (create.name() == null || create.name().isBlank()) {
-            throw new IOException("Docker " + create.kind() + " name is required.");
+        if (create.name == null || create.name.isBlank()) {
+            throw new IOException("Docker " + create.kind + " name is required.");
         }
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        ObjectNode body = dockerNamedResourceBody(create.name().trim(), create.data(), create.labels());
+        ObjectNode body = dockerNamedResourceBody(create.name.trim(), create.data, create.labels);
         try {
             return httpJson(
                     "POST",
-                    base + API_ENDPOINTS + endpointId + "/docker/" + create.dockerPathSegment() + "/create",
+                    base + API_ENDPOINTS + endpointId + "/docker/" + create.dockerPathSegment + "/create",
                     apiKey,
                     body,
-                    create.debugNote());
+                    create.debugNote);
         } catch (IOException e) {
-            throw mapDockerNamedResourceCreateError(e, create.kind(), create.name());
+            throw mapDockerNamedResourceCreateError(e, create.kind, create.name);
         }
     }
 

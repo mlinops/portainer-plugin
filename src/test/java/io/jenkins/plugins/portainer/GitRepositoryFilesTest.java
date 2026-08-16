@@ -36,8 +36,8 @@ public class GitRepositoryFilesTest {
 
     @AfterEach
     public void clearOverrides() {
-        GitRepositoryFiles.testOverride = null;
-        GitRepositoryFiles.listTestOverride = null;
+        GitRepositoryFiles.testOverride.set(null);
+        GitRepositoryFiles.listTestOverride.set(null);
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
     }
 
@@ -279,10 +279,10 @@ public class GitRepositoryFilesTest {
     @Test
     public void listConfigFiles_defaultReferencePassedToOverride() throws Exception {
         AtomicReference<String> seenRef = new AtomicReference<>();
-        GitRepositoryFiles.listTestOverride = req -> {
+        GitRepositoryFiles.listTestOverride.set(req -> {
             seenRef.set(req.reference);
             return List.of();
-        };
+        });
         GitRepositoryFiles.listConfigFiles(
                 "http://127.0.0.1/configs.git",
                 "  ",
@@ -394,7 +394,7 @@ public class GitRepositoryFilesTest {
 
     @Test
     public void readFile_rejectsBlockedHost_withoutOverride() {
-        GitRepositoryFiles.testOverride = null;
+        GitRepositoryFiles.testOverride.set(null);
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.readFile(
@@ -408,7 +408,7 @@ public class GitRepositoryFilesTest {
 
     @Test
     public void readFile_rejectsUnresolvableHost_withoutOverride() {
-        GitRepositoryFiles.testOverride = null;
+        GitRepositoryFiles.testOverride.set(null);
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.readFile(
@@ -423,11 +423,11 @@ public class GitRepositoryFilesTest {
     @Test
     public void readFile_testOverride_bypassesHostCheck() throws Exception {
         AtomicBoolean called = new AtomicBoolean(false);
-        GitRepositoryFiles.testOverride = req -> {
+        GitRepositoryFiles.testOverride.set(req -> {
             called.set(true);
             assertEquals("http://169.254.169.254/repo.git", req.repositoryUrl);
             return "values: {}\n";
-        };
+        });
         String content = GitRepositoryFiles.readFile(
                 "http://169.254.169.254/repo.git",
                 "main",
@@ -439,7 +439,7 @@ public class GitRepositoryFilesTest {
 
     @Test
     public void listConfigFiles_rejectsBlockedHost_withoutOverride() {
-        GitRepositoryFiles.listTestOverride = null;
+        GitRepositoryFiles.listTestOverride.set(null);
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.listConfigFiles(
@@ -454,7 +454,7 @@ public class GitRepositoryFilesTest {
 
     @Test
     public void listConfigFiles_rejectsUnresolvableHost_withoutOverride() {
-        GitRepositoryFiles.listTestOverride = null;
+        GitRepositoryFiles.listTestOverride.set(null);
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.listConfigFiles(
@@ -470,11 +470,11 @@ public class GitRepositoryFilesTest {
     @Test
     public void listConfigFiles_listTestOverride_bypassesHostCheck() throws Exception {
         AtomicBoolean called = new AtomicBoolean(false);
-        GitRepositoryFiles.listTestOverride = req -> {
+        GitRepositoryFiles.listTestOverride.set(req -> {
             called.set(true);
             assertEquals("http://169.254.169.254/configs.git", req.repositoryUrl);
             return List.of(new SwarmConfigFile("app.json", "{}".getBytes()));
-        };
+        });
         List<SwarmConfigFile> files = GitRepositoryFiles.listConfigFiles(
                 "http://169.254.169.254/configs.git",
                 "main",

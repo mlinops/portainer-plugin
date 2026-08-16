@@ -4,7 +4,6 @@ import hudson.FilePath;
 import hudson.Launcher;
 import hudson.model.TaskListener;
 import hudson.util.ArgumentListBuilder;
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
@@ -28,10 +28,7 @@ import java.util.function.Function;
 final class GitRepositoryFiles {
 
     /** When non-null, {@link #readFile} returns this result instead of cloning. */
-    @SuppressFBWarnings(
-            value = "UWF_UNWRITTEN_FIELD",
-            justification = "Assigned from unit tests (package-private test hook)")
-    static volatile Function<FetchRequest, String> testOverride;
+    static final AtomicReference<Function<FetchRequest, String>> testOverride = new AtomicReference<>();
 
     /** When non-null, {@link #listConfigFiles} returns this result instead of cloning. */
     @FunctionalInterface
@@ -39,10 +36,7 @@ final class GitRepositoryFiles {
         List<SwarmConfigFile> apply(ListRequest req) throws IOException;
     }
 
-    @SuppressFBWarnings(
-            value = "UWF_UNWRITTEN_FIELD",
-            justification = "Assigned from unit tests (package-private test hook)")
-    static volatile ListConfigFilesOverride listTestOverride;
+    static final AtomicReference<ListConfigFilesOverride> listTestOverride = new AtomicReference<>();
 
     private static final String ASKPASS_USERNAME_FILE = "askpass.username";
     private static final String ASKPASS_PASSWORD_FILE = "askpass.password";
@@ -113,7 +107,7 @@ final class GitRepositoryFiles {
         String path = PortainerComposePath.normalize(relativePath, "Values file path");
         String ref = defaultGitReference(reference);
 
-        Function<FetchRequest, String> override = testOverride;
+        Function<FetchRequest, String> override = testOverride.get();
         if (override != null) {
             return override.apply(new FetchRequest(repo, ref, path));
         }
@@ -156,7 +150,7 @@ final class GitRepositoryFiles {
         String glob = SwarmConfigNaming.normalizeFileGlob(fileGlob);
         String ref = defaultGitReference(reference);
 
-        ListConfigFilesOverride override = listTestOverride;
+        ListConfigFilesOverride override = listTestOverride.get();
         if (override != null) {
             return override.apply(new ListRequest(repo, ref, dir, glob));
         }

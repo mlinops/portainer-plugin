@@ -66,7 +66,7 @@ public class PortainerHelmBuilderTest {
         lastPath.set(null);
         lastMethod.set(null);
         helmMutationOrder.clear();
-        GitRepositoryFiles.testOverride = null;
+        GitRepositoryFiles.testOverride.set(null);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             lastPath.set(exchange.getRequestURI().getPath());
@@ -141,7 +141,7 @@ public class PortainerHelmBuilderTest {
 
     @AfterEach
     public void stopServer() {
-        GitRepositoryFiles.testOverride = null;
+        GitRepositoryFiles.testOverride.set(null);
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
         if (server != null) {
             server.stop(0);
@@ -209,12 +209,12 @@ public class PortainerHelmBuilderTest {
     @Test
     public void freestyle_repository_fetchesThenSendsValues(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        GitRepositoryFiles.testOverride = req -> {
+        GitRepositoryFiles.testOverride.set(req -> {
             assertEquals("https://gitlab.example/group/values.git", req.repositoryUrl);
             assertEquals("refs/heads/main", req.reference);
             assertEquals("values.yaml", req.relativePath);
             return "replicaCount: 2\n";
-        };
+        });
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
