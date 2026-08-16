@@ -90,21 +90,14 @@ final class GitRepositoryFiles {
             throws IOException, InterruptedException {
         String repo = GitRepositoryUrl.normalize(repositoryUrl);
         String path = PortainerComposePath.normalize(relativePath, "Values file path");
-        String ref = reference == null || reference.isBlank()
-                ? PortainerStackBuilder.DEFAULT_REPOSITORY_REFERENCE
-                : reference.trim();
+        String ref = defaultGitReference(reference);
 
         Function<FetchRequest, String> override = testOverride;
         if (override != null) {
             return override.apply(new FetchRequest(repo, ref, path));
         }
         ConnectionTester.assertHostAllowed(repo, ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
-        if (workspace == null) {
-            throw new IOException("Workspace is required to fetch Helm values from Git.");
-        }
-        if (launcher == null) {
-            throw new IOException("Launcher is required to fetch Helm values from Git.");
-        }
+        requireCloneContext(workspace, launcher, "Helm values");
 
         FilePath tmp = workspace.createTempDir("portainer-helm-values", null);
         try {
@@ -118,14 +111,7 @@ final class GitRepositoryFiles {
             }
             return file.readToString();
         } finally {
-            try {
-                tmp.deleteRecursive();
-            } catch (IOException | InterruptedException cleanup) {
-                if (cleanup instanceof InterruptedException) {
-                    Thread.currentThread().interrupt();
-                }
-                // best-effort cleanup
-            }
+            deleteTempQuietly(tmp);
         }
     }
 
@@ -167,13 +153,13 @@ final class GitRepositoryFiles {
         }
     }
 
-    private static String defaultGitReference(String reference) {
+    static String defaultGitReference(String reference) {
         return reference == null || reference.isBlank()
                 ? PortainerStackBuilder.DEFAULT_REPOSITORY_REFERENCE
                 : reference.trim();
     }
 
-    private static void requireCloneContext(FilePath workspace, Launcher launcher, String label)
+    static void requireCloneContext(FilePath workspace, Launcher launcher, String label)
             throws IOException {
         if (workspace == null) {
             throw new IOException("Workspace is required to fetch " + label + " from Git.");
@@ -183,7 +169,7 @@ final class GitRepositoryFiles {
         }
     }
 
-    private static FilePath requireConfigDirectory(FilePath root, String dir)
+    static FilePath requireConfigDirectory(FilePath root, String dir)
             throws IOException, InterruptedException {
         if (!root.exists()) {
             throw new IOException("Config path not found in repository: " + dir);
@@ -194,7 +180,7 @@ final class GitRepositoryFiles {
         return root;
     }
 
-    private static List<SwarmConfigFile> listMatchingConfigFiles(FilePath root, String glob)
+    static List<SwarmConfigFile> listMatchingConfigFiles(FilePath root, String glob)
             throws IOException, InterruptedException {
         FilePath[] matches = root.list(glob, "");
         if (matches == null || matches.length == 0) {
@@ -211,7 +197,7 @@ final class GitRepositoryFiles {
         return out;
     }
 
-    private static SwarmConfigFile toConfigFile(FilePath root, FilePath file)
+    static SwarmConfigFile toConfigFile(FilePath root, FilePath file)
             throws IOException, InterruptedException {
         if (file == null || !file.exists() || file.isDirectory()) {
             return null;
@@ -229,7 +215,7 @@ final class GitRepositoryFiles {
         }
     }
 
-    private static void deleteTempQuietly(FilePath tmp) {
+    static void deleteTempQuietly(FilePath tmp) {
         try {
             tmp.deleteRecursive();
         } catch (IOException | InterruptedException cleanup) {
