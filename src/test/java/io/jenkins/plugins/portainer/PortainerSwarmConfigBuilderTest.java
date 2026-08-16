@@ -414,7 +414,7 @@ public class PortainerSwarmConfigBuilderTest {
 
     private static void stubGitFiles() {
         GitRepositoryFiles.listTestOverride.set(req -> List.of(
-                new SwarmConfigFile("app-settings.json", "{\"a\":1}".getBytes(StandardCharsets.UTF_8)));
+                new SwarmConfigFile("app-settings.json", "{\"a\":1}".getBytes(StandardCharsets.UTF_8))));
     }
 
     private void configurePortainer(JenkinsRule jenkins) throws Exception {
