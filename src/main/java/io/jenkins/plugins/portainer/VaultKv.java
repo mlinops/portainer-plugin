@@ -141,7 +141,7 @@ final class VaultKv {
         try (VaultClient vault = new VaultClient(connectMs, readMs, req.log)) {
             Map<String, String> data = vault.readKvV2(new VaultClient.ReadRequest(
                     baseUrl, appRole.roleId, appRole.secretId, mount, path, namespace, version));
-            return data == null ? Map.of() : data;
+            return data;
         } catch (IOException e) {
             String msg = PortainerConnections.truncateMessage(e);
             if (req.policy == Policy.REQUIRED

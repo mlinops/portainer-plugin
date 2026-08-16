@@ -4,6 +4,7 @@ import hudson.FilePath;
 import hudson.Launcher;
 import hudson.model.TaskListener;
 import hudson.util.ArgumentListBuilder;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -27,9 +28,15 @@ import java.util.function.Function;
 final class GitRepositoryFiles {
 
     /** When non-null, {@link #readFile} returns this result instead of cloning. */
+    @SuppressFBWarnings(
+            value = "UWF_UNWRITTEN_FIELD",
+            justification = "Assigned from unit tests (package-private test hook)")
     static volatile Function<FetchRequest, String> testOverride;
 
     /** When non-null, {@link #listConfigFiles} returns this result instead of cloning. */
+    @SuppressFBWarnings(
+            value = "UWF_UNWRITTEN_FIELD",
+            justification = "Assigned from unit tests (package-private test hook)")
     static volatile Function<ListRequest, List<SwarmConfigFile>> listTestOverride;
 
     private static final String ASKPASS_USERNAME_FILE = "askpass.username";
