@@ -371,7 +371,7 @@ final class GitRepositoryFiles {
         return out;
     }
 
-    private static String relativeRemotePath(FilePath base, FilePath file) {
+    static String relativeRemotePath(FilePath base, FilePath file) {
         String baseRemote = base.getRemote();
         String fileRemote = file.getRemote();
         if (baseRemote == null || fileRemote == null) {

@@ -2,11 +2,15 @@ package io.jenkins.plugins.portainer;
 
 import hudson.AbortException;
 import hudson.model.TaskListener;
+import net.sf.json.JSONNull;
 import net.sf.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
+import java.util.function.BiFunction;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -24,7 +28,9 @@ public class ConnectionModeTest {
         assertEquals(ConnectionMode.NONE, ConnectionMode.normalize("none", ConnectionMode.INHERIT));
         assertEquals(ConnectionMode.NONE, ConnectionMode.normalize("off", ConnectionMode.INHERIT));
         assertEquals(ConnectionMode.NONE, ConnectionMode.normalize("disabled", ConnectionMode.INHERIT));
+        assertEquals(ConnectionMode.NONE, ConnectionMode.normalize("disconnected", ConnectionMode.INHERIT));
         assertEquals(ConnectionMode.INHERIT, ConnectionMode.normalize("other", ConnectionMode.INHERIT));
+        assertEquals(ConnectionMode.MANUAL, ConnectionMode.normalize("unknown", ConnectionMode.MANUAL));
     }
 
     @Test
@@ -38,6 +44,32 @@ public class ConnectionModeTest {
         assertEquals(
                 ConnectionMode.NONE,
                 ConnectionMode.normalize("{\"value\":\"none\"}", ConnectionMode.INHERIT));
+    }
+
+    @Test
+    public void unwrapRadioBlockMode_nullAndNonJsonLeftUnchanged() {
+        assertNull(ConnectionMode.unwrapRadioBlockMode(null));
+        assertEquals("manual", ConnectionMode.unwrapRadioBlockMode("manual"));
+        assertEquals("{no-value-key}", ConnectionMode.unwrapRadioBlockMode("{no-value-key}"));
+        assertEquals("value-without-brace", ConnectionMode.unwrapRadioBlockMode("value-without-brace"));
+    }
+
+    @Test
+    public void unwrapRadioBlockMode_extractsValueOrFallsThrough() {
+        assertEquals("manual", ConnectionMode.unwrapRadioBlockMode("{\"value\":\"manual\"}"));
+
+        assertEquals(
+                "{\"value\":null}",
+                ConnectionMode.unwrapRadioBlockMode("{\"value\":null}"));
+        JSONObject nullValue = new JSONObject();
+        nullValue.put(ConnectionMode.RADIO_VALUE, JSONNull.getInstance());
+        assertEquals(nullValue.toString(), ConnectionMode.unwrapRadioBlockMode(nullValue.toString()));
+
+        assertEquals("{\"value\":\"\"}", ConnectionMode.unwrapRadioBlockMode("{\"value\":\"\"}"));
+        assertEquals("{\"value\":\"   \"}", ConnectionMode.unwrapRadioBlockMode("{\"value\":\"   \"}"));
+
+        String malformed = "{value";
+        assertEquals(malformed, ConnectionMode.unwrapRadioBlockMode(malformed));
     }
 
     @Test
@@ -106,6 +138,104 @@ public class ConnectionModeTest {
                 form, "portainerConnectionMode", "portainerUrl", "portainerCredentialsId");
         assertEquals("manual", form.getString("portainerConnectionMode"));
         assertEquals("https://portainer.example:9443", form.getString("portainerUrl"));
+    }
+
+    @Test
+    public void flattenRadioBlock_noOpWhenFormModeKeyOrBlockMissing() {
+        ConnectionMode.flattenRadioBlock(null, "portainerConnectionMode", "portainerUrl");
+
+        JSONObject form = new JSONObject();
+        form.put("portainerConnectionMode", "manual");
+        ConnectionMode.flattenRadioBlock(form, null, "portainerUrl");
+        assertEquals("manual", form.getString("portainerConnectionMode"));
+
+        ConnectionMode.flattenRadioBlock(form, "missingKey", "portainerUrl");
+        assertFalse(form.has("missingKey"));
+    }
+
+    @Test
+    public void flattenRadioBlock_nullNormalizerAndBlankDefaultMode() {
+        JSONObject form = new JSONObject();
+        JSONObject block = new JSONObject();
+        block.put("value", "manual");
+        block.put("portainerUrl", "https://portainer.example:9443");
+        form.put("portainerConnectionMode", block);
+
+        ConnectionMode.flattenRadioBlock(
+                form,
+                "portainerConnectionMode",
+                null,
+                (BiFunction<String, String, String>) null,
+                "portainerUrl");
+        assertEquals(ConnectionMode.MANUAL, form.getString("portainerConnectionMode"));
+        assertEquals("https://portainer.example:9443", form.getString("portainerUrl"));
+
+        JSONObject form2 = new JSONObject();
+        JSONObject emptyValue = new JSONObject();
+        emptyValue.put("value", "   ");
+        form2.put("mode", emptyValue);
+        ConnectionMode.flattenRadioBlock(
+                form2, "mode", "  ", (BiFunction<String, String, String>) null);
+        assertEquals(ConnectionMode.INHERIT, form2.getString("mode"));
+    }
+
+    @Test
+    public void flattenRadioBlock_nullNestedFieldsStillFlattensMode() {
+        JSONObject form = new JSONObject();
+        JSONObject block = new JSONObject();
+        block.put("value", "none");
+        form.put("vaultConnectionMode", block);
+
+        ConnectionMode.flattenRadioBlock(
+                form,
+                "vaultConnectionMode",
+                ConnectionMode.NONE,
+                ConnectionMode::normalize,
+                (String[]) null);
+        assertEquals(ConnectionMode.NONE, form.getString("vaultConnectionMode"));
+    }
+
+    @Test
+    public void flattenRadioBlock_skipsNullAndJsonNullNestedFields() {
+        JSONObject form = new JSONObject();
+        JSONObject block = new JSONObject();
+        block.put("value", "manual");
+        block.put("portainerUrl", JSONNull.getInstance());
+        block.put("portainerCredentialsId", null);
+        block.put("kept", "yes");
+        form.put("portainerConnectionMode", block);
+
+        ConnectionMode.flattenRadioBlock(
+                form,
+                "portainerConnectionMode",
+                "portainerUrl",
+                "portainerCredentialsId",
+                null,
+                "kept",
+                "absent");
+
+        assertEquals(ConnectionMode.MANUAL, form.getString("portainerConnectionMode"));
+        assertFalse(form.has("portainerUrl"));
+        assertFalse(form.has("portainerCredentialsId"));
+        assertEquals("yes", form.getString("kept"));
+        assertFalse(form.has("absent"));
+    }
+
+    @Test
+    public void flattenRadioBlock_blankOrMissingValueUsesDefaultMode() {
+        JSONObject form = new JSONObject();
+        JSONObject blankValue = new JSONObject();
+        blankValue.put("value", "");
+        form.put("mode", blankValue);
+        ConnectionMode.flattenRadioBlock(form, "mode", ConnectionMode.NONE, ConnectionMode::normalize);
+        assertEquals(ConnectionMode.NONE, form.getString("mode"));
+
+        JSONObject form2 = new JSONObject();
+        JSONObject noValue = new JSONObject();
+        noValue.put("other", "x");
+        form2.put("mode", noValue);
+        ConnectionMode.flattenRadioBlock(form2, "mode", ConnectionMode.MANUAL, ConnectionMode::normalize);
+        assertEquals(ConnectionMode.MANUAL, form2.getString("mode"));
     }
 
     @Test

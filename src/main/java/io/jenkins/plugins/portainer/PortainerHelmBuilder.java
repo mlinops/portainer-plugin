@@ -56,6 +56,7 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
     public static final String VALUES_REPOSITORY = HelmValuesSource.REPOSITORY;
     public static final String VALUES_YAML = HelmValuesSource.YAML;
 
+    private static final String VALUES_FILE_PATH_LABEL = "Values file path";
     private static final Pattern RELEASE_PATTERN = Pattern.compile("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$");
 
     private final String endpointId;
@@ -330,30 +331,7 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
             TaskListener listener,
             PortainerBuildLogger log) throws InterruptedException, IOException {
         long startedNs = System.nanoTime();
-
-        final String expandedRelease = PortainerConnections.abortOn(log, () -> {
-            String name = buildEnv.expand(releaseName == null ? "" : releaseName).trim();
-            requireValidReleaseName(name);
-            return name;
-        });
-        final String expandedNamespace = PortainerConnections.abortOn(
-                log, () -> PortainerManifestBuilder.resolveNamespace(namespace, buildEnv));
-        PortainerConnections.abortOn(log, () -> {
-            if (chart == null || chart.isBlank()) {
-                throw new IllegalArgumentException("Helm chart name is required.");
-            }
-            return null;
-        });
-
-        final int endpoint = PortainerConnections.abortOn(
-                log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
-
-        final String mode = getValuesSource();
-        final String chartRepo = PortainerConnections.abortOn(
-                log, () -> ChartRepositoryUrl.normalize(buildEnv.expand(repo)));
-        final String chartVersion = version == null || version.isBlank()
-                ? null
-                : buildEnv.expand(version).trim();
+        HelmParsedInputs inputs = parseHelmInputs(buildEnv, log);
 
         PortainerGlobalConfiguration cfg = PortainerGlobalConfiguration.get();
         final PortainerConnections.Authenticated auth = PortainerConnections.resolveAuthenticated(
@@ -367,104 +345,152 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         final String apiKey = auth.apiKey;
         Item item = run.getParent();
 
-        // Portainer → Git (values) → mutate
         PortainerBuildLogger.debugPortainerStart(
-                log,
-                connection,
-                endpoint,
-                "chartRepo=" + chartRepo
-                        + (chartVersion == null || chartVersion.isBlank() ? "" : " version=" + chartVersion)
-                        + " valuesSource=" + mode
-                        + " atomic=" + atomic
-                        + " forceReinstall=" + forceReinstall);
+                log, connection, inputs.endpoint, helmDebugExtras(inputs));
 
         try (PortainerClient client = new PortainerClient(
                 connection.connectTimeoutMs, connection.readTimeoutMs, log)) {
-            PortainerConnections.runPreflight(client, connection, apiKey, endpoint, true, true, log);
+            PortainerConnections.runPreflight(
+                    client, connection, apiKey, inputs.endpoint, true, true, log);
 
-            String valuesRepoUrl = null;
-            String valuesGitRef = null;
-            String valuesPath = null;
-            if (HelmValuesSource.isRepository(mode)) {
-                valuesRepoUrl = PortainerConnections.abortOn(log, () -> GitRepositoryUrl.normalize(
-                        buildEnv.expand(valuesRepositoryUrl == null ? "" : valuesRepositoryUrl)));
-                valuesGitRef = PortainerStackBuilder.resolveRepositoryReference(
-                        valuesRepositoryReferenceName, buildEnv);
-                valuesPath = PortainerConnections.abortOn(log, () -> PortainerComposePath.normalize(
-                        valuesFilePath == null || valuesFilePath.isBlank()
-                                ? DEFAULT_VALUES_FILE
-                                : buildEnv.expand(valuesFilePath),
-                        "Values file path"));
-                PortainerBuildLogger.logGitPreflight(
-                        log, valuesGitRef, valuesRepoUrl, valuesPath, null, null, null);
-            }
-
-            if (!HelmValuesSource.isNone(mode)) {
+            ValuesRepoLocals valuesRepo = prepareValuesRepoLocals(inputs.mode, buildEnv, log);
+            if (!HelmValuesSource.isNone(inputs.mode)) {
                 log.info("Loading values");
             }
             final String valuesYaml;
             try {
-                ResolvedValues resolved = resolveValues(
-                        mode, buildEnv, item, workspace, launcher, listener,
-                        valuesRepoUrl, valuesGitRef, valuesPath);
-                valuesYaml = resolved.content;
+                valuesYaml = resolveValues(
+                        inputs.mode, buildEnv, item, workspace, launcher, listener, valuesRepo)
+                        .content;
             } catch (IllegalArgumentException | IllegalStateException e) {
                 throw PortainerConnections.abort(log, e.getMessage());
             } catch (IOException e) {
                 throw PortainerConnections.abort(log, PortainerConnections.truncateMessage(e), e, true);
             }
-
-            String expandedChart = buildEnv.expand(chart).trim();
-            log.info("Release name=" + expandedRelease
-                    + " chart=" + expandedChart
-                    + " namespace=" + expandedNamespace);
-            log.info("Values source=" + mode);
-            String valuesDebug = valuesDebugLine(mode, valuesYaml);
-            if (valuesDebug != null) {
-                log.debug(valuesDebug);
-            }
+            logReleasePlan(log, inputs, valuesYaml);
 
             if (validateOnly) {
-                log.info("Validate-only — skipping deploy");
-                if (ensureNamespace) {
-                    log.debug("Would ensure namespace=" + expandedNamespace);
-                }
-                log.debug("Would "
-                        + (forceReinstall ? "force-reinstall" : "install-or-upgrade")
-                        + " helm release=" + expandedRelease
-                        + " chart=" + expandedChart
-                        + " namespace=" + expandedNamespace
-                        + (chartVersion == null || chartVersion.isBlank() ? "" : " version=" + chartVersion)
-                        + " valuesSource=" + mode);
-                summarize(log, startedNs, "validated", expandedRelease, expandedChart, chartVersion);
+                finishValidateOnly(log, startedNs, inputs);
                 return;
             }
 
-            try {
-                String outcome = deployHelm(
-                        client,
-                        connection,
-                        apiKey,
-                        endpoint,
-                        expandedRelease,
-                        expandedChart,
-                        chartRepo,
-                        expandedNamespace,
-                        chartVersion,
-                        valuesYaml,
-                        log);
-                summarize(
-                        log, startedNs, outcome, expandedRelease, expandedChart, chartVersion);
-            } catch (AbortException e) {
-                throw e;
-            } catch (IOException e) {
-                String msg = PortainerConnections.truncateMessage(e);
-                throw PortainerConnections.abort(
-                        log,
-                        "Helm operation failed: " + msg + PortainerClient.kubernetesConnectivityHint(msg),
-                        e,
-                        true);
+            deployAndSummarize(client, connection, apiKey, inputs, valuesYaml, log, startedNs);
+        }
+    }
+
+    private HelmParsedInputs parseHelmInputs(EnvVars buildEnv, PortainerBuildLogger log)
+            throws AbortException {
+        final String expandedRelease = PortainerConnections.abortOn(log, () -> {
+            String name = buildEnv.expand(releaseName == null ? "" : releaseName).trim();
+            requireValidReleaseName(name);
+            return name;
+        });
+        final String expandedNamespace = PortainerConnections.abortOn(
+                log, () -> PortainerManifestBuilder.resolveNamespace(namespace, buildEnv));
+        PortainerConnections.abortOn(log, () -> {
+            if (chart == null || chart.isBlank()) {
+                throw new IllegalArgumentException("Helm chart name is required.");
             }
+            return null;
+        });
+        final int endpoint = PortainerConnections.abortOn(
+                log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
+        final String mode = getValuesSource();
+        final String chartRepo = PortainerConnections.abortOn(
+                log, () -> ChartRepositoryUrl.normalize(buildEnv.expand(repo)));
+        final String chartVersion = version == null || version.isBlank()
+                ? null
+                : buildEnv.expand(version).trim();
+        final String expandedChart = buildEnv.expand(chart).trim();
+        return new HelmParsedInputs(
+                expandedRelease, expandedNamespace, endpoint, mode, chartRepo, chartVersion, expandedChart);
+    }
+
+    private String helmDebugExtras(HelmParsedInputs inputs) {
+        return "chartRepo=" + inputs.chartRepo
+                + (blank(inputs.chartVersion) ? "" : " version=" + inputs.chartVersion)
+                + " valuesSource=" + inputs.mode
+                + " atomic=" + atomic
+                + " forceReinstall=" + forceReinstall;
+    }
+
+    private ValuesRepoLocals prepareValuesRepoLocals(
+            String mode, EnvVars buildEnv, PortainerBuildLogger log) throws AbortException {
+        if (!HelmValuesSource.isRepository(mode)) {
+            return ValuesRepoLocals.none();
+        }
+        String valuesRepoUrl = PortainerConnections.abortOn(log, () -> GitRepositoryUrl.normalize(
+                buildEnv.expand(valuesRepositoryUrl == null ? "" : valuesRepositoryUrl)));
+        String valuesGitRef = PortainerStackBuilder.resolveRepositoryReference(
+                valuesRepositoryReferenceName, buildEnv);
+        String valuesPath = PortainerConnections.abortOn(log, () -> PortainerComposePath.normalize(
+                valuesFilePath == null || valuesFilePath.isBlank()
+                        ? DEFAULT_VALUES_FILE
+                        : buildEnv.expand(valuesFilePath),
+                VALUES_FILE_PATH_LABEL));
+        PortainerBuildLogger.logGitPreflight(
+                log, valuesGitRef, valuesRepoUrl, valuesPath, null, null, null);
+        return new ValuesRepoLocals(valuesRepoUrl, valuesGitRef, valuesPath);
+    }
+
+    private void logReleasePlan(PortainerBuildLogger log, HelmParsedInputs inputs, String valuesYaml) {
+        log.info("Release name=" + inputs.release
+                + " chart=" + inputs.chart
+                + " namespace=" + inputs.namespace);
+        log.info("Values source=" + inputs.mode);
+        String valuesDebug = valuesDebugLine(inputs.mode, valuesYaml);
+        if (valuesDebug != null) {
+            log.debug(valuesDebug);
+        }
+    }
+
+    private void finishValidateOnly(PortainerBuildLogger log, long startedNs, HelmParsedInputs inputs) {
+        log.info("Validate-only — skipping deploy");
+        if (ensureNamespace) {
+            log.debug("Would ensure namespace=" + inputs.namespace);
+        }
+        log.debug("Would "
+                + (forceReinstall ? "force-reinstall" : "install-or-upgrade")
+                + " helm release=" + inputs.release
+                + " chart=" + inputs.chart
+                + " namespace=" + inputs.namespace
+                + (blank(inputs.chartVersion) ? "" : " version=" + inputs.chartVersion)
+                + " valuesSource=" + inputs.mode);
+        summarize(log, startedNs, "validated", inputs.release, inputs.chart, inputs.chartVersion);
+    }
+
+    private void deployAndSummarize(
+            PortainerClient client,
+            ResolvedConnection connection,
+            String apiKey,
+            HelmParsedInputs inputs,
+            String valuesYaml,
+            PortainerBuildLogger log,
+            long startedNs) throws AbortException, IOException {
+        try {
+            String outcome = deployHelm(
+                    client,
+                    connection,
+                    apiKey,
+                    inputs.endpoint,
+                    new HelmDeployParams(
+                            inputs.release,
+                            inputs.chart,
+                            inputs.chartRepo,
+                            inputs.namespace,
+                            inputs.chartVersion,
+                            valuesYaml),
+                    log);
+            summarize(log, startedNs, outcome, inputs.release, inputs.chart, inputs.chartVersion);
+        } catch (AbortException e) {
+            throw e;
+        } catch (IOException e) {
+            String msg = PortainerConnections.truncateMessage(e);
+            throw PortainerConnections.abort(
+                    log,
+                    "Helm operation failed: " + msg + PortainerClient.kubernetesConnectivityHint(msg),
+                    e,
+                    true);
         }
     }
 
@@ -473,27 +499,15 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
             ResolvedConnection connection,
             String apiKey,
             int endpoint,
-            String release,
-            String chartName,
-            String chartRepo,
-            String namespace,
-            String chartVersion,
-            String valuesYaml,
+            HelmDeployParams params,
             PortainerBuildLogger log) throws IOException {
         if (ensureNamespace) {
-            KubernetesNamespaces.ensure(client, connection, apiKey, endpoint, namespace, log);
+            KubernetesNamespaces.ensure(client, connection, apiKey, endpoint, params.namespace, log);
         }
         boolean exists = client.helmReleaseExists(
-                connection.baseUrl, apiKey, endpoint, release, namespace);
+                connection.baseUrl, apiKey, endpoint, params.release, params.namespace);
         if (forceReinstall) {
-            if (exists) {
-                log.info("Helm force reinstall — uninstalling then installing release=" + release);
-                client.uninstallHelmRelease(
-                        connection.baseUrl, apiKey, endpoint, release, namespace);
-                log.info("Helm release uninstalled name=" + release);
-            } else {
-                log.debug("Helm release name not found");
-            }
+            uninstallExistingRelease(client, connection, apiKey, endpoint, params, exists, log);
         }
         log.info("Ensuring Helm release");
         client.installHelmChart(
@@ -501,14 +515,32 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
                 apiKey,
                 endpoint,
                 new PortainerClient.HelmInstallRequest(
-                        release,
-                        chartName,
-                        chartRepo,
-                        namespace,
-                        chartVersion,
-                        valuesYaml,
+                        params.release,
+                        params.chartName,
+                        params.chartRepo,
+                        params.namespace,
+                        params.chartVersion,
+                        params.valuesYaml,
                         atomic));
         return exists ? "updated" : "created";
+    }
+
+    private static void uninstallExistingRelease(
+            PortainerClient client,
+            ResolvedConnection connection,
+            String apiKey,
+            int endpoint,
+            HelmDeployParams params,
+            boolean exists,
+            PortainerBuildLogger log) throws IOException {
+        if (exists) {
+            log.info("Helm force reinstall — uninstalling then installing release=" + params.release);
+            client.uninstallHelmRelease(
+                    connection.baseUrl, apiKey, endpoint, params.release, params.namespace);
+            log.info("Helm release uninstalled name=" + params.release);
+        } else {
+            log.debug("Helm release name not found");
+        }
     }
 
     private ResolvedValues resolveValues(
@@ -518,37 +550,48 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
             FilePath workspace,
             Launcher launcher,
             TaskListener listener,
-            String precomputedRepoUrl,
-            String precomputedGitRef,
-            String precomputedPath) throws IOException, InterruptedException {
+            ValuesRepoLocals precomputed) throws IOException, InterruptedException {
         if (HelmValuesSource.isNone(mode)) {
             return ResolvedValues.none();
         }
         if (HelmValuesSource.isYaml(mode)) {
-            if (values == null || values.isBlank()) {
-                throw new IllegalArgumentException("Values YAML content is required for Manual YAML source.");
-            }
-            requireLooksLikeYaml(values);
-            return ResolvedValues.yaml(values);
+            return resolveYamlValues();
         }
-        // repository — agent workspace + Launcher required for shallow clone
+        return resolveRepositoryValues(buildEnv, item, workspace, launcher, listener, precomputed);
+    }
+
+    private ResolvedValues resolveYamlValues() {
+        if (values == null || values.isBlank()) {
+            throw new IllegalArgumentException("Values YAML content is required for Manual YAML source.");
+        }
+        requireLooksLikeYaml(values);
+        return ResolvedValues.yaml(values);
+    }
+
+    private ResolvedValues resolveRepositoryValues(
+            EnvVars buildEnv,
+            Item item,
+            FilePath workspace,
+            Launcher launcher,
+            TaskListener listener,
+            ValuesRepoLocals precomputed) throws IOException, InterruptedException {
         if (workspace == null || launcher == null) {
             throw new IllegalStateException(
                     "Helm Values from repository require an agent workspace (wrap the step in node { } / agent any).");
         }
-        String repoUrl = precomputedRepoUrl != null
-                ? precomputedRepoUrl
+        String repoUrl = precomputed.repoUrl != null
+                ? precomputed.repoUrl
                 : GitRepositoryUrl.normalize(
                         buildEnv.expand(valuesRepositoryUrl == null ? "" : valuesRepositoryUrl));
-        String path = precomputedPath != null
-                ? precomputedPath
+        String path = precomputed.path != null
+                ? precomputed.path
                 : PortainerComposePath.normalize(
                         valuesFilePath == null || valuesFilePath.isBlank()
                                 ? DEFAULT_VALUES_FILE
                                 : buildEnv.expand(valuesFilePath),
-                        "Values file path");
-        String gitRef = precomputedGitRef != null
-                ? precomputedGitRef
+                        VALUES_FILE_PATH_LABEL);
+        String gitRef = precomputed.gitRef != null
+                ? precomputed.gitRef
                 : PortainerStackBuilder.resolveRepositoryReference(
                         valuesRepositoryReferenceName, buildEnv);
         PortainerCredentials.GitAuth gitAuth =
@@ -560,6 +603,10 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         }
         requireLooksLikeYaml(content);
         return ResolvedValues.repository(content, repoUrl, gitRef, path);
+    }
+
+    private static boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 
     /** Values payload size/hash for DEBUG; {@code null} when none (no values). */
@@ -617,6 +664,73 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
                 content,
                 "Values YAML content is required.",
                 "Values content does not look like YAML (expected ':' or '---').");
+    }
+
+    private static final class HelmParsedInputs {
+        final String release;
+        final String namespace;
+        final int endpoint;
+        final String mode;
+        final String chartRepo;
+        final String chartVersion;
+        final String chart;
+
+        HelmParsedInputs(
+                String release,
+                String namespace,
+                int endpoint,
+                String mode,
+                String chartRepo,
+                String chartVersion,
+                String chart) {
+            this.release = release;
+            this.namespace = namespace;
+            this.endpoint = endpoint;
+            this.mode = mode;
+            this.chartRepo = chartRepo;
+            this.chartVersion = chartVersion;
+            this.chart = chart;
+        }
+    }
+
+    private static final class ValuesRepoLocals {
+        final String repoUrl;
+        final String gitRef;
+        final String path;
+
+        private ValuesRepoLocals(String repoUrl, String gitRef, String path) {
+            this.repoUrl = repoUrl;
+            this.gitRef = gitRef;
+            this.path = path;
+        }
+
+        static ValuesRepoLocals none() {
+            return new ValuesRepoLocals(null, null, null);
+        }
+    }
+
+    private static final class HelmDeployParams {
+        final String release;
+        final String chartName;
+        final String chartRepo;
+        final String namespace;
+        final String chartVersion;
+        final String valuesYaml;
+
+        HelmDeployParams(
+                String release,
+                String chartName,
+                String chartRepo,
+                String namespace,
+                String chartVersion,
+                String valuesYaml) {
+            this.release = release;
+            this.chartName = chartName;
+            this.chartRepo = chartRepo;
+            this.namespace = namespace;
+            this.chartVersion = chartVersion;
+            this.valuesYaml = valuesYaml;
+        }
     }
 
     private static final class ResolvedValues {
@@ -772,7 +886,7 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
             }
             String err = PortainerComposePath.validate(
                     value == null || value.isBlank() ? DEFAULT_VALUES_FILE : value,
-                    "Values file path");
+                    VALUES_FILE_PATH_LABEL);
             return err == null ? FormValidation.ok() : FormValidation.error(err);
         }
 
