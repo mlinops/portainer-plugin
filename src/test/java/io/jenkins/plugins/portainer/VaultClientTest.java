@@ -72,7 +72,8 @@ public class VaultClientTest {
         });
         server.createContext("/v1/secret/data", exchange -> {
             callOrder.add("kv");
-            lastPath.set(exchange.getRequestURI().getPath());
+            // Raw path keeps %20 (etc.); getPath() would decode and hide encoding checks.
+            lastPath.set(exchange.getRequestURI().getRawPath());
             lastQuery.set(exchange.getRequestURI().getRawQuery());
             lastToken.set(exchange.getRequestHeaders().getFirst("X-Vault-Token"));
             lastNamespace.set(exchange.getRequestHeaders().getFirst("X-Vault-Namespace"));
@@ -499,8 +500,11 @@ public class VaultClientTest {
         try (VaultClient client = new VaultClient(2000, 2000)) {
             client.readKvV2(new VaultClient.ReadRequest(
                     base, "role", "secret", "secret", "my app/prod", null, null));
-            assertTrue(lastPath.get().contains("my%20app") || lastPath.get().contains("my+app")
-                    || lastPath.get().endsWith("/my%20app/prod"));
+            // encodePathSegments uses URLEncoder then '+' → '%20'
+            assertTrue(
+                    lastPath.get().contains("my%20app"),
+                    () -> "expected encoded segment in raw path, got: " + lastPath.get());
+            assertTrue(lastPath.get().endsWith("/v1/secret/data/my%20app/prod"));
         }
     }
 
