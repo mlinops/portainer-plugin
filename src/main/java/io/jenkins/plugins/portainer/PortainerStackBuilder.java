@@ -421,7 +421,7 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     private void performBody(
             Run<?, ?> run,
             EnvVars buildEnv,
-            PortainerBuildLogger log) throws InterruptedException, IOException {
+            PortainerBuildLogger log) throws IOException {
         long startedNs = System.nanoTime();
         StackParsedInputs inputs = parseStackInputs(buildEnv, log);
         List<PortainerClient.EnvPair> envPairs = parseExpandedEnv(buildEnv, log);
@@ -469,7 +469,10 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
                     connection,
                     apiKey,
                     new StackDeployRequest(
-                            inputs, existingId, envPairs, gitAuth, run, buildEnv, item, vaultFields),
+                            inputs,
+                            existingId,
+                            new StackEnvAndAuth(envPairs, gitAuth),
+                            new StackRunContext(run, buildEnv, item, vaultFields)),
                     log,
                     startedNs);
         }
@@ -632,9 +635,10 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             long startedNs) throws AbortException {
         try {
             MergedEnv merged = mergeEnvWithExisting(
-                    client, connection, apiKey, req.existingId, req.envPairs, log);
+                    client, connection, apiKey, req.existingId, req.envAndAuth.envPairs, log);
+            StackRunContext ctx = req.runContext;
             Map<String, String> vaultOverlay = resolveVaultOverlay(
-                    req.run, req.buildEnv, req.item, connection, req.vaultFields, log);
+                    ctx.run, ctx.buildEnv, ctx.item, connection, ctx.vaultFields, log);
             int vaultKeyCount = vaultOverlay.size();
             List<PortainerClient.EnvPair> finalEnv = PortainerEnvMerge.merge(merged.envPairs, vaultOverlay);
             logEnvKeys(log, finalEnv, merged.existingKeyCount, merged.stepKeyCount, vaultKeyCount);
@@ -661,7 +665,7 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
                                 req.inputs.repoUrl,
                                 req.inputs.compose,
                                 req.inputs.gitRef,
-                                req.gitAuth,
+                                req.envAndAuth.gitAuth,
                                 finalEnv));
             }
             summarize(log, startedNs, deploy.outcome, deploy.stackId);
@@ -946,33 +950,45 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         }
     }
 
-    private static final class StackDeployRequest {
-        final StackParsedInputs inputs;
-        final int existingId;
+    private static final class StackEnvAndAuth {
         final List<PortainerClient.EnvPair> envPairs;
         final PortainerCredentials.GitAuth gitAuth;
+
+        StackEnvAndAuth(List<PortainerClient.EnvPair> envPairs, PortainerCredentials.GitAuth gitAuth) {
+            this.envPairs = envPairs;
+            this.gitAuth = gitAuth;
+        }
+    }
+
+    private static final class StackRunContext {
         final Run<?, ?> run;
         final EnvVars buildEnv;
         final Item item;
         final VaultFields vaultFields;
 
-        StackDeployRequest(
-                StackParsedInputs inputs,
-                int existingId,
-                List<PortainerClient.EnvPair> envPairs,
-                PortainerCredentials.GitAuth gitAuth,
-                Run<?, ?> run,
-                EnvVars buildEnv,
-                Item item,
-                VaultFields vaultFields) {
-            this.inputs = inputs;
-            this.existingId = existingId;
-            this.envPairs = envPairs;
-            this.gitAuth = gitAuth;
+        StackRunContext(Run<?, ?> run, EnvVars buildEnv, Item item, VaultFields vaultFields) {
             this.run = run;
             this.buildEnv = buildEnv;
             this.item = item;
             this.vaultFields = vaultFields;
+        }
+    }
+
+    private static final class StackDeployRequest {
+        final StackParsedInputs inputs;
+        final int existingId;
+        final StackEnvAndAuth envAndAuth;
+        final StackRunContext runContext;
+
+        StackDeployRequest(
+                StackParsedInputs inputs,
+                int existingId,
+                StackEnvAndAuth envAndAuth,
+                StackRunContext runContext) {
+            this.inputs = inputs;
+            this.existingId = existingId;
+            this.envAndAuth = envAndAuth;
+            this.runContext = runContext;
         }
     }
 
@@ -992,6 +1008,9 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     @Extension
     public static final class DescriptorImpl extends BuildStepDescriptor<Builder> {
 
+        /** Read-only summary when Vault connection is Not connected. */
+        public static final String VAULT_NONE_SUMMARY = "Vault disabled.";
+
         @Override
         public boolean isApplicable(Class<? extends AbstractProject> jobType) {
             return true;
@@ -1009,26 +1028,28 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
          */
         @Override
         public Builder newInstance(StaplerRequest2 req, JSONObject formData) throws Descriptor.FormException {
-            if (formData != null) {
-                ConnectionMode.flattenRadioBlock(
-                        formData,
-                        "portainerConnectionMode",
-                        "portainerUrl",
-                        "portainerCredentialsId");
-                ConnectionMode.flattenRadioBlock(
-                        formData,
-                        "vaultConnectionMode",
-                        ConnectionMode.NONE,
-                        ConnectionMode::normalize,
-                        "vaultUrl",
-                        "vaultAppRoleCredentialsId",
-                        "vaultPath",
-                        "vaultMount",
-                        "vaultNamespace",
-                        "vaultVersion");
-                StackSource.flattenRadioBlock(formData);
+            JSONObject data = formData;
+            if (data == null) {
+                data = new JSONObject();
             }
-            return super.newInstance(req, formData);
+            ConnectionMode.flattenRadioBlock(
+                    data,
+                    "portainerConnectionMode",
+                    "portainerUrl",
+                    "portainerCredentialsId");
+            ConnectionMode.flattenRadioBlock(
+                    data,
+                    "vaultConnectionMode",
+                    ConnectionMode.NONE,
+                    ConnectionMode::normalize,
+                    "vaultUrl",
+                    "vaultAppRoleCredentialsId",
+                    "vaultPath",
+                    "vaultMount",
+                    "vaultNamespace",
+                    "vaultVersion");
+            StackSource.flattenRadioBlock(data);
+            return super.newInstance(req, data);
         }
 
         /**
@@ -1049,11 +1070,6 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
 
         public String getVaultInheritSummary() {
             return VaultPluginInherit.inheritSummary();
-        }
-
-        /** Read-only summary when Vault connection is Not connected. */
-        public String getVaultNoneSummary() {
-            return "Vault disabled.";
         }
 
         @POST

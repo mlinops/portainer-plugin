@@ -84,15 +84,16 @@ final class VaultClient implements AutoCloseable {
         String base = VaultUrl.normalizeBaseUrl(vaultUrl);
         String token = loginAppRole(base, roleId, secretId, namespace);
         try {
-            httpJson(new HttpJsonCall(
-                    "GET",
-                    base + "/v1/auth/token/lookup-self",
-                    token,
-                    namespace,
-                    null,
-                    "Vault token lookup-self",
-                    false,
-                    Set.of()));
+            httpJson(
+                    new HttpJsonCall(
+                            "GET",
+                            base + "/v1/auth/token/lookup-self",
+                            namespace,
+                            null,
+                            "Vault token lookup-self",
+                            false,
+                            Set.of()),
+                    token);
         } finally {
             revokeSelf(base, token, namespace);
         }
@@ -106,15 +107,16 @@ final class VaultClient implements AutoCloseable {
         String base = VaultUrl.normalizeBaseUrl(vaultUrl);
         JsonNode root;
         try {
-            root = httpJson(new HttpJsonCall(
-                    "GET",
-                    base + "/v1/sys/health",
-                    null,
-                    namespace,
-                    null,
-                    "Vault health",
-                    false,
-                    Set.of(429, 473)));
+            root = httpJson(
+                    new HttpJsonCall(
+                            "GET",
+                            base + "/v1/sys/health",
+                            namespace,
+                            null,
+                            "Vault health",
+                            false,
+                            Set.of(429, 473)),
+                    null);
         } catch (IOException e) {
             throw mapHealthError(e);
         }
@@ -146,14 +148,15 @@ final class VaultClient implements AutoCloseable {
         }
         long startedNs = System.nanoTime();
         try {
-            httpJson(new HttpJsonCall(
-                    "POST",
-                    base + REVOKE_SELF_PATH,
-                    token,
-                    namespace,
-                    null,
-                    "Vault token revoke-self",
-                    true));
+            httpJson(
+                    new HttpJsonCall(
+                            "POST",
+                            base + REVOKE_SELF_PATH,
+                            namespace,
+                            null,
+                            "Vault token revoke-self",
+                            true),
+                    token);
             long durationMs = (System.nanoTime() - startedNs) / 1_000_000L;
             if (buildLog != null) {
                 buildLog.http("POST", REVOKE_SELF_PATH, durationMs);
@@ -200,14 +203,15 @@ final class VaultClient implements AutoCloseable {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("role_id", roleId);
         body.put("secret_id", secretId);
-        JsonNode auth = httpJson(new HttpJsonCall(
-                "POST",
-                base + "/v1/auth/approle/login",
-                null,
-                namespace,
-                body,
-                "Vault AppRole login",
-                false));
+        JsonNode auth = httpJson(
+                new HttpJsonCall(
+                        "POST",
+                        base + "/v1/auth/approle/login",
+                        namespace,
+                        body,
+                        "Vault AppRole login",
+                        false),
+                null);
         String token = text(auth.path("auth"), "client_token");
         if (token.isBlank()) {
             throw new IOException("Vault AppRole login did not return a client token.");
@@ -228,8 +232,8 @@ final class VaultClient implements AutoCloseable {
             throws IOException {
         String url = buildKvV2Url(base, mount, path, version);
         try {
-            return httpJson(new HttpJsonCall(
-                    "GET", url, token, namespace, null, "Vault KV v2 read", false));
+            return httpJson(
+                    new HttpJsonCall("GET", url, namespace, null, "Vault KV v2 read", false), token);
         } catch (IOException e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
             if (msg.contains("404")) {
@@ -389,12 +393,12 @@ final class VaultClient implements AutoCloseable {
         return end == value.length() ? value : value.substring(0, end);
     }
 
-    private JsonNode httpJson(HttpJsonCall call) throws IOException {
+    private JsonNode httpJson(HttpJsonCall call, String clientAuth) throws IOException {
         URI uri = createApiUri(call.apiUrl);
         assertRequestHostsAllowed(call.apiUrl, uri);
 
         String method = call.method == null ? "GET" : call.method.toUpperCase(Locale.ROOT);
-        HttpRequest request = buildHttpRequest(uri, call, method);
+        HttpRequest request = buildHttpRequest(uri, call, method, clientAuth);
 
         long startedNs = System.nanoTime();
         HttpResponse<byte[]> response = sendHttp(request, uri, call.opLabel);
@@ -422,12 +426,13 @@ final class VaultClient implements AutoCloseable {
         }
     }
 
-    private HttpRequest buildHttpRequest(URI uri, HttpJsonCall call, String method) throws IOException {
+    private HttpRequest buildHttpRequest(URI uri, HttpJsonCall call, String method, String clientAuth)
+            throws IOException {
         HttpRequest.Builder req = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofMillis(Math.max(1, readTimeoutMs)))
                 .header("Accept", "application/json");
-        if (call.vaultToken != null && !call.vaultToken.isBlank()) {
-            req.header("X-Vault-Token", call.vaultToken);
+        if (clientAuth != null && !clientAuth.isBlank()) {
+            req.header("X-Vault-Token", clientAuth);
         }
         if (call.namespace != null && !call.namespace.isBlank()) {
             req.header("X-Vault-Namespace", call.namespace.trim());
@@ -681,7 +686,6 @@ final class VaultClient implements AutoCloseable {
     private static final class HttpJsonCall {
         final String method;
         final String apiUrl;
-        final String vaultToken;
         final String namespace;
         final JsonNode body;
         final String opLabel;
@@ -691,18 +695,16 @@ final class VaultClient implements AutoCloseable {
         HttpJsonCall(
                 String method,
                 String apiUrl,
-                String vaultToken,
                 String namespace,
                 JsonNode body,
                 String opLabel,
                 boolean skipBuildHttpLog) {
-            this(method, apiUrl, vaultToken, namespace, body, opLabel, skipBuildHttpLog, Set.of());
+            this(method, apiUrl, namespace, body, opLabel, skipBuildHttpLog, Set.of());
         }
 
         HttpJsonCall(
                 String method,
                 String apiUrl,
-                String vaultToken,
                 String namespace,
                 JsonNode body,
                 String opLabel,
@@ -710,7 +712,6 @@ final class VaultClient implements AutoCloseable {
                 Set<Integer> extraSuccessCodes) {
             this.method = method;
             this.apiUrl = apiUrl;
-            this.vaultToken = vaultToken;
             this.namespace = namespace;
             this.body = body;
             this.opLabel = opLabel;

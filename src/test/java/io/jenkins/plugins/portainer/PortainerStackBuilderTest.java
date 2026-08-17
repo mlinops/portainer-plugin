@@ -1011,7 +1011,7 @@ public class PortainerStackBuilderTest {
     }
 
     @Test
-    public void freestyle_vaultInherit_withoutPlugin_failsClearly(JenkinsRule jenkins) throws Exception {
+    public void freestyle_vaultInherit_withoutSystemConfig_failsClearly(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins, "prod");
         stacksEmpty.set(true);
 
@@ -1023,7 +1023,8 @@ public class PortainerStackBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
-        jenkins.assertLogContains("HashiCorp Vault Plugin is not installed", build);
+        // API stubs present; Global Vault System empty → unconfigured (not "plugin missing").
+        jenkins.assertLogContains("Vault Plugin System is not configured", build);
         assertTrue(!createCalled.get());
     }
 
@@ -1068,12 +1069,20 @@ public class PortainerStackBuilderTest {
         assertEquals("System Portainer is not configured.", d.getPortainerConnectionSummary());
         configurePortainer(jenkins, "Production Portainer");
         assertEquals("System Portainer is configured.", d.getPortainerConnectionSummary());
-        // Soft dep not on test classpath → Inherit summary warns plugin missing.
+        // API test doubles present; Global Vault System remains empty → not configured.
         String vaultSummary = d.getVaultInheritSummary();
-        assertEquals("Vault Plugin is not installed.", vaultSummary);
+        assertEquals("Vault Plugin is not configured.", vaultSummary);
         assertEquals(vaultSummary, VaultPluginInherit.inheritSummary());
         assertFalse(d.isVaultInheritReady());
-        assertEquals("Vault disabled.", d.getVaultNoneSummary());
+        assertEquals("Vault disabled.", PortainerStackBuilder.DescriptorImpl.VAULT_NONE_SUMMARY);
+    }
+
+    @Test
+    public void descriptor_newInstance_nullFormData(JenkinsRule jenkins) {
+        PortainerStackBuilder.DescriptorImpl d =
+                jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
+        // null form → empty JSONObject then Stapler bind (fails without required fields)
+        assertThrows(Throwable.class, () -> d.newInstance((org.kohsuke.stapler.StaplerRequest2) null, null));
     }
 
     private void configurePortainer(JenkinsRule jenkins, String name) throws Exception {

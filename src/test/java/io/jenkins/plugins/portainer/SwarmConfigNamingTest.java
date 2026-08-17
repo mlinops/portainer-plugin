@@ -46,6 +46,16 @@ class SwarmConfigNamingTest {
         assertEquals("STAGE_RABBITMQ_CONFIG", SwarmConfigNaming.envKeyForBasename("stage_rabbitmq_config"));
         assertEquals("ENABLED_PLUGINS", SwarmConfigNaming.envKeyForBasename("enabled_plugins"));
         assertEquals("RABBITMQ_SIGNING_KEY", SwarmConfigNaming.envKeyForBasename("rabbitmq_signing_key"));
+        assertEquals("CONFIG", SwarmConfigNaming.envKeyForBasename("---"));
+        assertEquals("FOO", SwarmConfigNaming.envKeyForBasename("foo_"));
+        assertEquals("FOO", SwarmConfigNaming.envKeyForBasename("---foo---"));
+    }
+
+    @Test
+    void sanitizeBasename_stripsLeadingTrailingDotsAndDashes() {
+        assertEquals("app", SwarmConfigNaming.sanitizeBasename("---app..."));
+        assertEquals("app.settings", SwarmConfigNaming.sanitizeBasename(".app.settings."));
+        assertEquals("config", SwarmConfigNaming.sanitizeBasename("---..."));
     }
 
     @Test

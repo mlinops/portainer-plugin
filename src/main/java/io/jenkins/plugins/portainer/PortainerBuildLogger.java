@@ -141,7 +141,9 @@ final class PortainerBuildLogger {
     void error(String message, Throwable thrown) {
         error(message);
         if (thrown != null) {
-            jul.log(Level.SEVERE, formatLine(Level.SEVERE, firstLine(message)), thrown);
+            if (jul.isLoggable(Level.SEVERE)) {
+                jul.log(Level.SEVERE, formatLine(Level.SEVERE, firstLine(message)), thrown);
+            }
             if (listener != null) {
                 thrown.printStackTrace(listener.getLogger());
             }
@@ -153,6 +155,9 @@ final class PortainerBuildLogger {
      * so Jenkins prints the summary once).
      */
     void errorJul(String message, Throwable thrown) {
+        if (!jul.isLoggable(Level.SEVERE)) {
+            return;
+        }
         String line = formatLine(Level.SEVERE, firstLine(message));
         if (thrown == null) {
             jul.log(Level.SEVERE, line);
@@ -436,11 +441,18 @@ final class PortainerBuildLogger {
     }
 
     private void emit(Level level, String message, boolean toConsole) {
+        boolean writeConsole = toConsole && listener != null;
+        boolean logJul = jul.isLoggable(level);
+        if (!logJul && !writeConsole) {
+            return;
+        }
         String body = capitalizeMessage(message);
         String[] lines = body.isEmpty() ? new String[] {""} : body.split("\\R", -1);
         String first = formatLine(level, lines[0]);
-        jul.log(level, first);
-        if (toConsole && listener != null) {
+        if (logJul) {
+            jul.log(level, first);
+        }
+        if (writeConsole) {
             PrintStream out = listener.getLogger();
             out.println(first);
             for (int i = 1; i < lines.length; i++) {

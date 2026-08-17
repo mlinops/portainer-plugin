@@ -51,6 +51,17 @@ public class VaultClientTest {
         callOrder.clear();
         revokeHits.set(0);
         lastRevokeToken.set(null);
+        loginCode.set(200);
+        readCode.set(200);
+        revokeCode.set(204);
+        loginBody.set("{\"auth\":{\"client_token\":\"hvs.test-token\"}}");
+        readBody.set(
+                "{\"data\":{\"data\":{\"IMAGE_TAG\":\"1.2.3\",\"DB_PASS\":\"s3cret\"},\"metadata\":{\"version\":2}}}");
+        lastPath.set(null);
+        lastToken.set(null);
+        lastLoginBody.set(null);
+        lastNamespace.set(null);
+        lastQuery.set(null);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/auth/approle/login", exchange -> {
             callOrder.add("login");
@@ -61,7 +72,8 @@ public class VaultClientTest {
         });
         server.createContext("/v1/secret/data", exchange -> {
             callOrder.add("kv");
-            lastPath.set(exchange.getRequestURI().getPath());
+            // Raw path keeps %20 (etc.); getPath() would decode and hide encoding checks.
+            lastPath.set(exchange.getRequestURI().getRawPath());
             lastQuery.set(exchange.getRequestURI().getRawQuery());
             lastToken.set(exchange.getRequestHeaders().getFirst("X-Vault-Token"));
             lastNamespace.set(exchange.getRequestHeaders().getFirst("X-Vault-Namespace"));
@@ -421,6 +433,181 @@ public class VaultClientTest {
             client.preflightAppRole(base, "role-abc", "secret-xyz", "enterprise-ns");
             assertEquals("enterprise-ns", lastNamespace.get());
             assertEquals(List.of("login", "lookup-self", "revoke-self"), callOrder);
+        }
+    }
+
+    @Test
+    public void probeHealth_standby473_accepted() throws Exception {
+        server.removeContext("/v1/sys/health");
+        server.createContext("/v1/sys/health", exchange -> {
+            callOrder.add("health");
+            respond(exchange, 473, "{\"initialized\":true,\"sealed\":false,\"standby\":true,\"performance_standby\":true}");
+        });
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            client.probeHealth(base, null);
+        }
+        assertEquals(List.of("health"), callOrder);
+    }
+
+    @Test
+    public void readKvV2_rejectsNestedArrayValues() {
+        readBody.set("{\"data\":{\"data\":{\"tags\":[\"a\",\"b\"]},\"metadata\":{}}}");
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "secret", "secret", "myapp", null, null)));
+            assertTrue(ex.getMessage().toLowerCase().contains("nested")
+                    || ex.getMessage().toLowerCase().contains("flat"));
+        }
+    }
+
+    @Test
+    public void readKvV2_blankSecretId_aborts() {
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "  ", "secret", "myapp", null, null)));
+            assertTrue(ex.getMessage().toLowerCase().contains("secret_id"));
+            assertEquals(List.of(), callOrder);
+        }
+    }
+
+    @Test
+    public void readKvV2_emptySuccessBody_andNonJson() {
+        readBody.set("");
+        readCode.set(200);
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "secret", "secret", "myapp", null, null)));
+            assertTrue(ex.getMessage().toLowerCase().contains("kv v2")
+                    || ex.getMessage().toLowerCase().contains("non-json"));
+        }
+
+        callOrder.clear();
+        readBody.set("not-json{{{");
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "secret", "secret", "myapp", null, null)));
+            assertTrue(ex.getMessage().toLowerCase().contains("non-json")
+                    || ex.getMessage().toLowerCase().contains("kv"));
+        }
+    }
+
+    @Test
+    public void readKvV2_encodedPathSegments() throws Exception {
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            client.readKvV2(new VaultClient.ReadRequest(
+                    base, "role", "secret", "secret", "my app/prod", null, null));
+            // encodePathSegments uses URLEncoder then '+' → '%20'
+            assertTrue(
+                    lastPath.get().contains("my%20app"),
+                    () -> "expected encoded segment in raw path, got: " + lastPath.get());
+            assertTrue(lastPath.get().endsWith("/v1/secret/data/my%20app/prod"));
+        }
+    }
+
+    @Test
+    public void readKvV2_404DetailSuffix_andSecretSuppressed() {
+        readCode.set(404);
+        readBody.set("{\"errors\":[\"permission denied on path\"]}");
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "secret", "secret", "gone", null, null)));
+            assertTrue(ex.getMessage().contains("not found") || ex.getMessage().contains("404"));
+            assertTrue(ex.getMessage().contains("gone") || ex.getMessage().contains("secret"));
+            assertFalse(ex.getMessage().contains("hvs.test-token"));
+        }
+
+        callOrder.clear();
+        revokeHits.set(0);
+        readCode.set(404);
+        readBody.set("{\"errors\":[\"client_token=hvs.leaked\"]}");
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () ->
+                    client.readKvV2(new VaultClient.ReadRequest(
+                            base, "role", "secret", "secret", "gone", null, null)));
+            assertFalse(ex.getMessage().contains("hvs.leaked"));
+            assertFalse(ex.getMessage().contains("client_token"));
+        }
+    }
+
+    @Test
+    public void revokeSelf_softFailWithoutHttpStatus_andBuildLogSuccess() throws Exception {
+        revokeCode.set(500);
+        server.removeContext("/v1/auth/token/revoke-self");
+        server.createContext("/v1/auth/token/revoke-self", exchange -> {
+            callOrder.add("revoke-self");
+            revokeHits.incrementAndGet();
+            lastRevokeToken.set(exchange.getRequestHeaders().getFirst("X-Vault-Token"));
+            respond(exchange, 500, "plain failure without json");
+        });
+
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        StreamTaskListener listener = new StreamTaskListener(buf, StandardCharsets.UTF_8);
+        PortainerBuildLogger log =
+                new PortainerBuildLogger(java.util.logging.Logger.getLogger("VaultClientTest"), listener, true);
+        try (VaultClient client = new VaultClient(2000, 2000, log)) {
+            Map<String, String> secrets = client.readKvV2(new VaultClient.ReadRequest(
+                    base, "role", "secret", "secret", "myapp/prod", null, null));
+            assertEquals("1.2.3", secrets.get("IMAGE_TAG"));
+        }
+        String console = buf.toString(StandardCharsets.UTF_8);
+        assertTrue(console.toLowerCase().contains("revoke") || console.contains("soft-fail"));
+
+        // successful revoke with buildLog (skipBuildHttpLog path still logs via revokeSelf)
+        callOrder.clear();
+        revokeHits.set(0);
+        revokeCode.set(204);
+        server.removeContext("/v1/auth/token/revoke-self");
+        server.createContext("/v1/auth/token/revoke-self", exchange -> {
+            callOrder.add("revoke-self");
+            revokeHits.incrementAndGet();
+            lastRevokeToken.set(exchange.getRequestHeaders().getFirst("X-Vault-Token"));
+            exchange.sendResponseHeaders(204, -1);
+            exchange.close();
+        });
+        buf.reset();
+        try (VaultClient client = new VaultClient(2000, 2000, log)) {
+            client.preflightAppRole(base, "role", "secret", null);
+        }
+        assertEquals(1, revokeHits.get());
+    }
+
+    @Test
+    public void probeHealth_mapsGenericHttpError() {
+        server.removeContext("/v1/sys/health");
+        server.createContext("/v1/sys/health", exchange ->
+                respond(exchange, 502, "{\"errors\":[\"bad gateway\"]}"));
+        try (VaultClient client = new VaultClient(2000, 2000)) {
+            IOException ex = assertThrows(IOException.class, () -> client.probeHealth(base, null));
+            assertTrue(ex.getMessage().contains("502") || ex.getMessage().toLowerCase().contains("failed"));
+        }
+    }
+
+    @Test
+    public void httpError_blankOpLabel_defaultsToVault() {
+        IOException ex = VaultClient.httpError(418, new byte[0], "  ");
+        assertTrue(ex.getMessage().contains("Vault"));
+        assertTrue(ex.getMessage().contains("418"));
+    }
+
+    @Test
+    public void connectToClosedPort_mapsConnectivity() throws Exception {
+        // Bind then close so connect is refused (still loopback-allowed).
+        HttpServer closed = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        int port = closed.getAddress().getPort();
+        closed.stop(0);
+        String dead = "http://127.0.0.1:" + port;
+        try (VaultClient client = new VaultClient(500, 500)) {
+            IOException ex = assertThrows(IOException.class, () -> client.probeHealth(dead, null));
+            assertTrue(
+                    ex.getMessage().toLowerCase().contains("connect")
+                            || ex.getMessage().toLowerCase().contains("network")
+                            || ex.getMessage().toLowerCase().contains("failed"),
+                    ex.getMessage());
         }
     }
 

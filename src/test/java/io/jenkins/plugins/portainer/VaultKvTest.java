@@ -174,7 +174,8 @@ class VaultKvTest {
     }
 
     @Test
-    void inherit_withoutPlugin_aborts(JenkinsRule jenkins) {
+    void inherit_withoutRun_aborts(JenkinsRule jenkins) {
+        // Vault API stubs make the peer "present"; Inherit still needs a Run for pullAndMerge.
         VaultFields fields = VaultFields.parse(
                 "apps/demo", "secret", "3", null, null, null);
         AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
@@ -186,14 +187,15 @@ class VaultKvTest {
                 0,
                 quietLog())));
         assertTrue(
-                ex.getMessage().contains(VaultPluginInherit.VAULT_PLUGIN_MISSING)
+                ex.getMessage().contains("running build")
+                        || ex.getMessage().contains(VaultPluginInherit.VAULT_PLUGIN_UNCONFIGURED)
                         || ex.getMessage().toLowerCase().contains("vault"),
                 ex.getMessage());
     }
 
     @Test
     void inherit_required_remapsNotFoundMessage(JenkinsRule jenkins) {
-        // Without plugin the message is "not installed" — still exercises inherit catch+abort path.
+        // API stubs present; Global empty — Inherit still aborts (unconfigured / no Run).
         VaultFields fields = VaultFields.parse("missing/path", "secret", null, null, null, null);
         AbortException ex = assertThrows(AbortException.class, () -> VaultKv.resolve(request(
                 VaultKv.Policy.REQUIRED,

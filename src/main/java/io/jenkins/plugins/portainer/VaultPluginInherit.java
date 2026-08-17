@@ -376,10 +376,9 @@ final class VaultPluginInherit {
             return wrapper.isActive();
         }
         try {
-            ClassLoader cl = uberClassLoaderOrNull();
-            if (cl == null) {
-                return false;
-            }
+            // Prefer vaultApiClassLoader (plugin wrapper / uber / this plugin CL) so optional peer
+            // API types resolve the same way as runtime Inherit calls.
+            ClassLoader cl = vaultApiClassLoader();
             loadClass(CLASS_VAULT_ACCESSOR, cl);
             loadClass(CLASS_VAULT_CONFIGURATION, cl);
             return true;
