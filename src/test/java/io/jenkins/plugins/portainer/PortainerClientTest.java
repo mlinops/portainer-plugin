@@ -1164,7 +1164,7 @@ public class PortainerClientTest {
     }
 
     @Test
-    public void createDockerNamedResource_blankNameAnd409Conflict() {
+    public void createDockerNamedResource_blankNameAnd409Conflict() throws Exception {
         try (PortainerClient client = new PortainerClient(2000, 2000)) {
             try {
                 client.createDockerConfig(
@@ -1394,7 +1394,7 @@ public class PortainerClientTest {
     }
 
     @Test
-    public void getStackEnv_rejectsNegativeId() {
+    public void getStackEnv_rejectsNegativeId() throws Exception {
         try (PortainerClient client = new PortainerClient(2000, 2000)) {
             try {
                 client.getStackEnv(base, "k", -1);
