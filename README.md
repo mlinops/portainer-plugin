@@ -36,21 +36,23 @@ Build logs stay scannable: short INFO phases and a **Summary** with `outcome=cre
 
 ## Screenshots
 
+Screenshots for plugins.jenkins.io are captured from a local Jenkins instance and committed before hosting release. See [`docs/images/README.md`](docs/images/README.md) for the checklist (`*.example` hosts only; never show real API tokens).
+
+| File | UI |
+|------|-----|
+| `docs/images/config.png` | Manage Jenkins → System → Portainer |
+| `docs/images/build.png` | Job configure → Portainer Stack Deployment |
+| `docs/images/step-helm.png` | Job configure → Portainer Helm Deployment (optional) |
+| `docs/images/step-manifest.png` | Job configure → Portainer Manifest Deployment (optional) |
+| `docs/images/step-config.png` | Job configure → Portainer Stack Config (optional) |
+| `docs/images/step-secret.png` | Job configure → Portainer Stack Secret (optional) |
+
+After capture, replace this table with live embeds, for example:
+
+```markdown
 ![Manage Jenkins → System → Portainer](docs/images/config.png)
-
 ![Job configure → Portainer Stack Deployment](docs/images/build.png)
-
-Optional step forms:
-
-![Job configure → Portainer Helm Deployment](docs/images/step-helm.png)
-
-![Job configure → Portainer Manifest Deployment](docs/images/step-manifest.png)
-
-![Job configure → Portainer Stack Config](docs/images/step-config.png)
-
-![Job configure → Portainer Stack Secret](docs/images/step-secret.png)
-
-Screenshot checklist: [`docs/images/README.md`](docs/images/README.md). Use only `*.example` hosts; never show real API tokens.
+```
 
 ## Quick start
 

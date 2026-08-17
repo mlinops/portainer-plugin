@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -428,8 +429,25 @@ class VaultPluginInheritTest {
                 Class.class,
                 EnvVars.class);
         m.setAccessible(true);
-        // Wrong types → ReflectiveOperationException caught inside applyPolicies
-        m.invoke(null, new Object(), new Object(), String.class, String.class, new EnvVars());
+        Object swallowed = assertDoesNotThrow(
+                () -> m.invoke(null, new Object(), new Object(), String.class, String.class, new EnvVars()));
+        assertNull(swallowed);
+        assertNull(VaultAccessor.lastPolicies);
+        assertTrue(VaultPluginInherit.isPluginPresent());
+
+        VaultAccessor accessor = new VaultAccessor();
+        VaultConfiguration cfg = new VaultConfiguration();
+        cfg.setPolicies("pol-after-swallow");
+        Object applied = assertDoesNotThrow(
+                () -> m.invoke(
+                        null,
+                        accessor,
+                        cfg,
+                        VaultConfiguration.class,
+                        VaultAccessor.class,
+                        new EnvVars()));
+        assertNull(applied);
+        assertEquals(List.of("pol-after-swallow"), VaultAccessor.lastPolicies);
     }
 
     @Test
