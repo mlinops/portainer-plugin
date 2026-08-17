@@ -22,15 +22,11 @@ final class VaultConnections {
     }
 
     static void runPreflight(Request req) throws AbortException {
-        if (req == null || req.log == null) {
-            throw new AbortException("Vault preflight requires a build logger.");
-        }
+        requireLog(req);
         String mode = ConnectionMode.normalize(
                 req.mode, req.required ? ConnectionMode.INHERIT : ConnectionMode.NONE);
         if (ConnectionMode.isNone(mode)) {
-            if (req.required) {
-                throw PortainerConnections.abort(req.log, "Vault connection is required.");
-            }
+            handleNone(req);
             return;
         }
 
@@ -39,27 +35,47 @@ final class VaultConnections {
         String namespace = VaultFields.expandOptional(req.vaultNamespace, req.buildEnv);
 
         if (pathRaw == null) {
-            if (ConnectionMode.isManual(mode)
-                    && (urlRaw != null || (req.appRoleCredentialsId != null && !req.appRoleCredentialsId.isBlank()))) {
-                throw PortainerConnections.abort(
-                        req.log,
-                        "Vault Manual is partially configured: vaultPath is required "
-                                + "(or set Vault connection to Not connected / clear vaultUrl "
-                                + "and vaultAppRoleCredentialsId).");
-            }
-            if (!req.required) {
-                return;
-            }
-            throw PortainerConnections.abort(req.log, "Vault path is required.");
+            handleMissingPath(req, mode, urlRaw);
+            return;
         }
 
         req.log.info("Preflight check of Vault");
 
-        // Package test seams: explicit skip flag, or Secret KV override (no production mutation).
         if (testSkipPreflight || PortainerSwarmSecretBuilder.testVaultOverride != null) {
             return;
         }
 
+        probeVault(req, mode, urlRaw, namespace);
+    }
+
+    private static void requireLog(Request req) throws AbortException {
+        if (req == null || req.log == null) {
+            throw new AbortException("Vault preflight requires a build logger.");
+        }
+    }
+
+    private static void handleNone(Request req) throws AbortException {
+        if (req.required) {
+            throw PortainerConnections.abort(req.log, "Vault connection is required.");
+        }
+    }
+
+    private static void handleMissingPath(Request req, String mode, String urlRaw) throws AbortException {
+        if (ConnectionMode.isManual(mode) && (urlRaw != null || nonBlank(req.appRoleCredentialsId))) {
+            throw PortainerConnections.abort(
+                    req.log,
+                    "Vault Manual is partially configured: vaultPath is required "
+                            + "(or set Vault connection to Not connected / clear vaultUrl "
+                            + "and vaultAppRoleCredentialsId).");
+        }
+        if (!req.required) {
+            return;
+        }
+        throw PortainerConnections.abort(req.log, "Vault path is required.");
+    }
+
+    private static void probeVault(Request req, String mode, String urlRaw, String namespace)
+            throws AbortException {
         int connectMs = req.connectTimeoutMs > 0
                 ? req.connectTimeoutMs
                 : PortainerGlobalConfiguration.DEFAULT_CONNECT_TIMEOUT_MS;
@@ -72,7 +88,7 @@ final class VaultConnections {
                 vault.probeHealth(baseUrl, namespace);
                 return;
             }
-            if (urlRaw == null || req.appRoleCredentialsId == null || req.appRoleCredentialsId.isBlank()) {
+            if (urlRaw == null || !nonBlank(req.appRoleCredentialsId)) {
                 throw PortainerConnections.abort(
                         req.log,
                         "Vault Manual requires vaultUrl and vaultAppRoleCredentialsId "
@@ -89,6 +105,10 @@ final class VaultConnections {
             throw PortainerConnections.abort(
                     req.log, "Vault preflight failed: " + PortainerConnections.truncateMessage(e), e);
         }
+    }
+
+    private static boolean nonBlank(String value) {
+        return value != null && !value.isBlank();
     }
 
     static final class Request {

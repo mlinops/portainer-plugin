@@ -260,7 +260,11 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
             PortainerBuildLogger.logGitPreflight(log, gitRef, repoUrl, configDir, glob, null, null);
             List<SwarmConfigFile> files = listConfigFilesFromGit(
                     new GitConfigListRequest(
-                            repoUrl, gitRef, configDir, glob, gitAuth, workspace, launcher, listener),
+                            repoUrl,
+                            gitRef,
+                            configDir,
+                            glob,
+                            new GitRepositoryFiles.CloneContext(gitAuth, workspace, launcher, listener)),
                     log);
 
             log.info("Git path=" + configDir);
@@ -338,12 +342,7 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
         List<SwarmConfigFile> files;
         try {
             files = GitRepositoryFiles.listConfigFiles(
-                    req.repoUrl,
-                    req.gitRef,
-                    req.configDir,
-                    req.glob,
-                    new GitRepositoryFiles.CloneContext(
-                            req.gitAuth, req.workspace, req.launcher, req.listener));
+                    req.repoUrl, req.gitRef, req.configDir, req.glob, req.cloneCtx);
         } catch (IOException e) {
             String msg = PortainerConnections.truncateMessage(e);
             if (msg.startsWith("Config path not found")
@@ -395,28 +394,19 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
         final String gitRef;
         final String configDir;
         final String glob;
-        final PortainerCredentials.GitAuth gitAuth;
-        final FilePath workspace;
-        final Launcher launcher;
-        final TaskListener listener;
+        final GitRepositoryFiles.CloneContext cloneCtx;
 
         GitConfigListRequest(
                 String repoUrl,
                 String gitRef,
                 String configDir,
                 String glob,
-                PortainerCredentials.GitAuth gitAuth,
-                FilePath workspace,
-                Launcher launcher,
-                TaskListener listener) {
+                GitRepositoryFiles.CloneContext cloneCtx) {
             this.repoUrl = repoUrl;
             this.gitRef = gitRef;
             this.configDir = configDir;
             this.glob = glob;
-            this.gitAuth = gitAuth;
-            this.workspace = workspace;
-            this.launcher = launcher;
-            this.listener = listener;
+            this.cloneCtx = cloneCtx;
         }
     }
 

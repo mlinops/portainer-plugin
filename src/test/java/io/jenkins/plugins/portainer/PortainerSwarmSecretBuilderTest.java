@@ -267,9 +267,10 @@ public class PortainerSwarmSecretBuilderTest {
     public void descriptor_vaultInheritHelpers(JenkinsRule jenkins) {
         PortainerSwarmSecretBuilder.DescriptorImpl d =
                 jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class);
-        assertFalse(d.isVaultPluginPresent());
+        // Test doubles make the Vault API loadable; Global System remains empty.
+        assertTrue(d.isVaultPluginPresent());
         assertFalse(d.isVaultInheritReady());
-        assertEquals("Vault Plugin is not installed.", d.getVaultInheritSummary());
+        assertEquals("Vault Plugin is not configured.", d.getVaultInheritSummary());
     }
 
     private static void stubVault() {

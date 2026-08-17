@@ -99,6 +99,24 @@ class PortainerBuildLoggerTest {
     }
 
     @Test
+    void errorWithThrowable_stillPrintsStackToConsoleWhenJulOff() throws Exception {
+        Logger jul = Logger.getLogger("PortainerBuildLoggerTest.errorThrowable");
+        Level previous = jul.getLevel();
+        jul.setLevel(Level.OFF);
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        try (StreamTaskListener listener = new StreamTaskListener(buf, StandardCharsets.UTF_8)) {
+            PortainerBuildLogger log = new PortainerBuildLogger(jul, listener, false);
+            log.error("helm failed", new RuntimeException("boom-detail"));
+        } finally {
+            jul.setLevel(previous);
+        }
+        String out = buf.toString(StandardCharsets.UTF_8);
+        assertTrue(out.contains("[ERROR] Helm failed"));
+        assertTrue(out.contains("boom-detail"));
+        assertTrue(out.contains("RuntimeException"));
+    }
+
+    @Test
     void console_consecutiveSteps_openingBannerOnly() throws Exception {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         try (StreamTaskListener listener = new StreamTaskListener(buf, StandardCharsets.UTF_8)) {

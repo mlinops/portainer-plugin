@@ -1,6 +1,5 @@
 package io.jenkins.plugins.portainer;
 
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -80,7 +79,7 @@ final class SwarmConfigNaming {
         while (key.contains("__")) {
             key = key.replace("__", "_");
         }
-        key = key.replaceAll("^_+|_+$", "");
+        key = stripSurroundingUnderscores(key);
         return key.isEmpty() ? "CONFIG" : key;
     }
 
@@ -133,7 +132,7 @@ final class SwarmConfigNaming {
         String s = raw.trim().toLowerCase(Locale.ROOT);
         s = s.replaceAll("[^a-z0-9._-]+", "-");
         s = s.replaceAll("-{2,}", "-");
-        s = s.replaceAll("^[.-]+|[.-]+$", "");
+        s = stripSurroundingDotsAndDashes(s);
         if (s.isEmpty()) {
             return "config";
         }
@@ -141,6 +140,46 @@ final class SwarmConfigNaming {
             s = "c-" + s;
         }
         return s;
+    }
+
+    /** Strip leading/trailing {@code _} without regex. */
+    private static String stripSurroundingUnderscores(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        int start = 0;
+        int end = value.length();
+        while (start < end && value.charAt(start) == '_') {
+            start++;
+        }
+        while (end > start && value.charAt(end - 1) == '_') {
+            end--;
+        }
+        return start == 0 && end == value.length() ? value : value.substring(start, end);
+    }
+
+    /** Strip leading/trailing {@code .} and {@code -} without regex. */
+    private static String stripSurroundingDotsAndDashes(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        int start = 0;
+        int end = value.length();
+        while (start < end) {
+            char c = value.charAt(start);
+            if (c != '.' && c != '-') {
+                break;
+            }
+            start++;
+        }
+        while (end > start) {
+            char c = value.charAt(end - 1);
+            if (c != '.' && c != '-') {
+                break;
+            }
+            end--;
+        }
+        return start == 0 && end == value.length() ? value : value.substring(start, end);
     }
 
     private static String stripExtension(String path) {

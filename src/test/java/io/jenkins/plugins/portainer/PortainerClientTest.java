@@ -62,6 +62,18 @@ public class PortainerClientTest {
     @BeforeEach
     public void startServer() throws IOException {
         System.setProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP, "true");
+        statusCode.set(200);
+        endpointsCode.set(200);
+        statusBody.set("{\"Version\":\"2.39.3\"}");
+        createCode.set(200);
+        createBody.set("{\"Id\":42,\"Name\":\"myapp\",\"EndpointId\":1}");
+        swarmCode.set(200);
+        stacksCode.set(200);
+        redeployCode.set(200);
+        helmListCode.set(200);
+        helmListBody.set("[{\"Name\":\"nginx\",\"Namespace\":\"default\"}]");
+        k8sVersionCode.set(200);
+        k8sVersionBody.set("{\"major\":\"1\",\"minor\":\"28\",\"gitVersion\":\"v1.28.0\"}");
         namespaceGetCode.set(200);
         namespaceGetBody.set("{\"Name\":\"apps\",\"IsSystem\":false}");
         namespaceCreateCode.set(200);
@@ -1092,6 +1104,334 @@ public class PortainerClientTest {
         assertEquals("app-07d8fcbc", summary.name);
         assertEquals("app", summary.labels.get("jenkins.portainer.config/base"));
         assertEquals("07d8fcbc", summary.labels.get("jenkins.portainer.config/hash"));
+    }
+
+    @Test
+    public void probeAccess_lowercaseVersionAndEndpoints403() throws Exception {
+        statusBody.set("{\"version\":\"2.40.0\"}");
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            PortainerClient.ProbeDetails details = client.probeAccess(base, "key");
+            assertEquals("Portainer v2.40.0", details.primaryLabel());
+        }
+
+        statusBody.set("{\"Version\":\"2.39.3\"}");
+        endpointsCode.set(403);
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            try {
+                client.probeAccess(base, "key");
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().toLowerCase().contains("lacks permission")
+                        || e.getMessage().contains("403"));
+                assertTrue(e.getMessage().contains("/api/endpoints"));
+            }
+        }
+    }
+
+    @Test
+    public void probeAccess_statusOkWithoutVersionLabel() throws Exception {
+        statusBody.set("{}");
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            assertEquals("Portainer status OK", client.probeAccess(base, "key").primaryLabel());
+        }
+    }
+
+    @Test
+    public void findStackIdByName_blankAndAlternateIdFields() throws Exception {
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            assertEquals(-1, client.findStackIdByName(base, "k", " ", 1));
+            assertEquals(-1, client.findStackIdByName(base, "k", null, 1));
+        }
+
+        server.stop(0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/stacks", exchange -> {
+            capture(exchange);
+            respond(
+                    exchange,
+                    200,
+                    "[{\"ID\":11,\"Name\":\"alt\",\"EndpointID\":5},"
+                            + "{\"Id\":12,\"Name\":\"alt\",\"EndpointId\":9}]");
+        });
+        server.start();
+        base = "http://127.0.0.1:" + server.getAddress().getPort();
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            assertEquals(11, client.findStackIdByName(base, "k", "alt", 5));
+            assertEquals(12, client.findStackIdByName(base, "k", "alt", 9));
+            assertEquals(-1, client.findStackIdByName(base, "k", "alt", 1));
+        }
+    }
+
+    @Test
+    public void createDockerNamedResource_blankNameAnd409Conflict() {
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            try {
+                client.createDockerConfig(
+                        base, "k", 1, new PortainerClient.DockerConfigCreateRequest(" ", new byte[0], null));
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().toLowerCase().contains("name is required"));
+            }
+        }
+
+        server.stop(0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/endpoints/1/docker/configs/create", exchange -> {
+            capture(exchange);
+            respond(exchange, 409, "{\"message\":\"name conflict\"}");
+        });
+        server.createContext("/api/endpoints/1/docker/secrets/create", exchange -> {
+            capture(exchange);
+            respond(exchange, 409, "{\"message\":\"name conflict\"}");
+        });
+        server.start();
+        base = "http://127.0.0.1:" + server.getAddress().getPort();
+
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            try {
+                client.createDockerConfig(
+                        base,
+                        "k",
+                        1,
+                        new PortainerClient.DockerConfigCreateRequest("dup", "x".getBytes(StandardCharsets.UTF_8), Map.of()));
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().contains("already exists"));
+                assertTrue(e.getMessage().contains("dup"));
+            }
+            try {
+                Map<String, String> labels = new java.util.LinkedHashMap<>();
+                labels.put(" ", "skip");
+                labels.put("k", null);
+                client.createDockerSecret(
+                        base,
+                        "k",
+                        1,
+                        new PortainerClient.DockerSecretCreateRequest(
+                                "dup-sec", "y".getBytes(StandardCharsets.UTF_8), labels));
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().contains("already exists"));
+                assertTrue(e.getMessage().contains("secret"));
+            }
+        }
+    }
+
+    @Test
+    public void createDockerConfig_nullDataAndEmptyLabels() throws Exception {
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            client.createDockerConfig(
+                    base, "k", 1, new PortainerClient.DockerConfigCreateRequest("plain", null, Map.of()));
+            JsonNode body = MAPPER.readTree(lastBody.get());
+            assertEquals("plain", body.path("Name").asText());
+            assertEquals("", body.path("Data").asText());
+            assertFalse(body.has("Labels"));
+        }
+    }
+
+    @Test
+    public void removeDockerConfigAndSecret_blankId() {
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            try {
+                client.removeDockerConfig(base, "k", 1, " ");
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().toLowerCase().contains("config id"));
+            }
+            try {
+                client.removeDockerSecret(base, "k", 1, null);
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().toLowerCase().contains("secret id"));
+            }
+        }
+    }
+
+    @Test
+    public void parseDockerConfigSummary_edgeCases() throws Exception {
+        assertEquals(null, PortainerClient.parseDockerConfigSummary(null));
+        assertEquals(null, PortainerClient.parseDockerConfigSummary(MAPPER.nullNode()));
+        assertEquals(null, PortainerClient.parseDockerConfigSummary(MAPPER.readTree("{\"ID\":\"x\"}")));
+        JsonNode flat = MAPPER.readTree("{\"Id\":\"i1\",\"Name\":\"n1\"}");
+        PortainerClient.DockerConfigSummary s = PortainerClient.parseDockerConfigSummary(flat);
+        assertEquals("i1", s.id);
+        assertEquals("n1", s.name);
+        assertTrue(s.labels.isEmpty());
+    }
+
+    @Test
+    public void isHttpStatus_andEnsureNamespaceBlank() {
+        assertFalse(PortainerClient.isHttpStatus(null, 404));
+        assertFalse(PortainerClient.isHttpStatus(new IOException(), 404));
+        assertTrue(PortainerClient.isHttpStatus(new IOException("HTTP 404 - gone"), 404));
+        assertTrue(PortainerClient.isHttpStatus(new IOException("wrap HTTP 409 - conflict"), 409));
+        assertFalse(PortainerClient.isHttpStatus(new IOException("HTTP 40"), 404));
+
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            try {
+                client.ensureNamespace(base, "k", 1, " ");
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().toLowerCase().contains("namespace is required"));
+            }
+        }
+    }
+
+    @Test
+    public void httpJson_emptyBodyAndHtmlErrorAndBuildLogVerbose() throws Exception {
+        server.stop(0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/endpoints/1/kubernetes/version", exchange -> {
+            capture(exchange);
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        server.createContext("/api/endpoints/1/kubernetes/helm", exchange -> {
+            capture(exchange);
+            respond(exchange, 500, "<!DOCTYPE html><html>ui</html>");
+        });
+        server.start();
+        base = "http://127.0.0.1:" + server.getAddress().getPort();
+
+        ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+        hudson.util.StreamTaskListener listener =
+                new hudson.util.StreamTaskListener(buf, StandardCharsets.UTF_8);
+        PortainerBuildLogger log = new PortainerBuildLogger(
+                java.util.logging.Logger.getLogger("PortainerClientTest"), listener, true);
+
+        try (PortainerClient client = new PortainerClient(2000, 2000, log)) {
+            JsonNode empty = client.probeKubernetesVersion(base, "k", 1);
+            assertTrue(empty.isObject());
+            assertTrue(empty.isEmpty());
+
+            try {
+                client.listHelmReleases(base, "k", 1, null);
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().toLowerCase().contains("html"));
+            }
+        }
+        String console = buf.toString(StandardCharsets.UTF_8);
+        assertTrue(console.contains("kubernetes") || console.toLowerCase().contains("http"));
+    }
+
+    @Test
+    public void helmReleaseExists_andUninstallBlankName() throws Exception {
+        helmListBody.set("{\"not\":\"array\"}");
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            assertFalse(client.helmReleaseExists(base, "k", 1, "nginx", "default"));
+        }
+        helmListBody.set(
+                "[{\"Name\":\"nginx\",\"Namespace\":\"other\"},{\"name\":\"web\",\"namespace\":\"\"}]");
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            assertFalse(client.helmReleaseExists(base, "k", 1, "nginx", "default"));
+            assertTrue(client.helmReleaseExists(base, "k", 1, "web", "apps"));
+            assertTrue(client.helmReleaseExists(base, "k", 1, "web", " "));
+            try {
+                client.uninstallHelmRelease(base, "k", 1, " ", "default");
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().toLowerCase().contains("release name"));
+            }
+        }
+    }
+
+    @Test
+    public void updateKubernetesStackGit_andResolveSwarmIdVariants() throws Exception {
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            client.updateKubernetesStackGit(
+                    base,
+                    "k",
+                    7,
+                    1,
+                    new PortainerClient.KubernetesGitUpdateRequest("refs/heads/main", "u", null));
+            assertEquals("PUT", lastMethod.get());
+            JsonNode body = MAPPER.readTree(lastBody.get());
+            assertEquals("refs/heads/main", body.path("RepositoryReferenceName").asText());
+            assertTrue(body.path("RepositoryAuthentication").asBoolean());
+            assertEquals("u", body.path("RepositoryUsername").asText());
+            assertFalse(body.has("RepositoryPassword"));
+            assertFalse(body.has("TLSSkipVerify"));
+        }
+
+        server.stop(0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> swarmBody = new AtomicReference<>("{\"Id\":\"swarm-lower\"}");
+        server.createContext("/api/endpoints", exchange -> {
+            capture(exchange);
+            String path = exchange.getRequestURI().getPath();
+            if (path != null && path.contains("/docker/swarm")) {
+                respond(exchange, 200, swarmBody.get());
+                return;
+            }
+            respond(exchange, 200, "[]");
+        });
+        server.start();
+        base = "http://127.0.0.1:" + server.getAddress().getPort();
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            assertEquals("swarm-lower", client.resolveSwarmId(base, "k", 1));
+            swarmBody.set("{}");
+            try {
+                client.resolveSwarmId(base, "k", 1);
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().contains("Swarm ID"));
+            }
+        }
+    }
+
+    @Test
+    public void httpError_statusCodesAndIsHttpStatusHelpers() {
+        assertTrue(PortainerClient.httpError(404, new byte[0]).getMessage().contains("404"));
+        assertTrue(PortainerClient.httpError(409, "{\"message\":\"x\"}".getBytes(StandardCharsets.UTF_8))
+                .getMessage()
+                .contains("409"));
+        assertTrue(PortainerClient.classifyChartRepoFetchFailure("connection refused").contains("network"));
+        assertEquals("chart repo unreachable", PortainerClient.classifyChartRepoFetchFailure("weird"));
+        assertEquals("", PortainerClient.extractInnermostGetFailure(null));
+        assertEquals("", PortainerClient.helmChartRepositoryHint("already Hint: present"));
+    }
+
+    @Test
+    public void getStackEnv_rejectsNegativeId() {
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            try {
+                client.getStackEnv(base, "k", -1);
+                fail("expected IllegalArgumentException");
+            } catch (IllegalArgumentException e) {
+                assertTrue(e.getMessage().contains("stackId"));
+            }
+        }
+    }
+
+    @Test
+    public void listDockerConfigs_nonArrayRejected() throws Exception {
+        server.stop(0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/endpoints/1/docker/configs", exchange -> {
+            capture(exchange);
+            respond(exchange, 200, "{\"not\":\"array\"}");
+        });
+        server.createContext("/api/endpoints/1/docker/secrets", exchange -> {
+            capture(exchange);
+            respond(exchange, 200, "{\"not\":\"array\"}");
+        });
+        server.start();
+        base = "http://127.0.0.1:" + server.getAddress().getPort();
+        try (PortainerClient client = new PortainerClient(2000, 2000)) {
+            try {
+                client.listDockerConfigs(base, "k", 1);
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().contains("array"));
+            }
+            try {
+                client.listDockerSecrets(base, "k", 1);
+                fail("expected IOException");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().contains("array"));
+            }
+        }
     }
 
     private void capture(HttpExchange exchange) throws IOException {

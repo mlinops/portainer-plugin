@@ -43,7 +43,7 @@
       <f:radioBlock name="vaultConnectionMode" value="none" title="${%Not connected}"
                     checked="${instance == null || instance.vaultConnectionMode == 'none'}">
         <f:entry>
-          <f:description>${descriptor.vaultNoneSummary}</f:description>
+          <f:description>${descriptor.VAULT_NONE_SUMMARY}</f:description>
         </f:entry>
       </f:radioBlock>
       <f:radioBlock name="vaultConnectionMode" value="inherit" title="${%Inherit from System}"

@@ -372,9 +372,10 @@ public class ConnectionModeTest {
     }
 
     @Test
-    public void vaultPluginInherit_missingPlugin_clearMessage() {
-        // Soft dep: no hashicorp-vault-plugin on PluginManager / uber CL in this module.
-        assertFalse(VaultPluginInherit.isPluginPresent());
+    public void vaultPluginInherit_requiresRun_whenApiStubsPresent() {
+        // Test doubles under com.datapipe.jenkins.vault.* make isPluginPresent() true without
+        // installing hashicorp-vault-plugin; Global System config remains empty here.
+        assertTrue(VaultPluginInherit.isPluginPresent());
         assertFalse(VaultPluginInherit.isSystemConfigured());
         assertEquals("hashicorp-vault-plugin", VaultPluginInherit.VAULT_PLUGIN_SHORT_NAME);
         AbortException ex = assertThrows(
@@ -387,14 +388,14 @@ public class ConnectionModeTest {
                         null,
                         TaskListener.NULL,
                         null));
-        assertTrue(ex.getMessage().contains("HashiCorp Vault Plugin is not installed"));
+        assertEquals("Vault Inherit requires a running build.", ex.getMessage());
         assertFalse(ex.getMessage().contains("Manual"));
     }
 
     @Test
-    public void vaultPluginInherit_summary_whenMissing() {
+    public void vaultPluginInherit_summary_whenUnconfigured() {
         String summary = VaultPluginInherit.inheritSummary();
-        assertEquals("Vault Plugin is not installed.", summary);
+        assertEquals("Vault Plugin is not configured.", summary);
     }
 
     @Test

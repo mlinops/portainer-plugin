@@ -47,7 +47,7 @@ final class PortainerCredentials {
                     "Credentials '" + credentialsId + "' type is not supported (use Secret text for " + purpose + ").");
         }
         String secret = sc.getSecret().getPlainText();
-        if (secret == null || secret.isBlank()) {
+        if (secret.isBlank()) {
             throw new IllegalStateException("Credentials '" + credentialsId + "' has an empty secret.");
         }
         return secret;
@@ -106,7 +106,7 @@ final class PortainerCredentials {
         }
         if (creds instanceof StringCredentials sc) {
             String secret = sc.getSecret().getPlainText();
-            if (secret == null || secret.isBlank()) {
+            if (secret.isBlank()) {
                 throw new IllegalStateException("Git credentials '" + credentialsId + "' has an empty secret.");
             }
             return new GitAuth("oauth2", secret);

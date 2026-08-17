@@ -19,7 +19,7 @@ final class PortainerUrl {
             throw new IllegalArgumentException(
                     "Portainer URL is required (http:// or https://portainer.example:9443).");
         }
-        String clean = portainerUrl.trim().replaceAll("/+$", "");
+        String clean = VaultClient.stripTrailingSlashes(portainerUrl.trim());
         boolean https = clean.regionMatches(true, 0, "https://", 0, 8);
         boolean http = clean.regionMatches(true, 0, "http://", 0, 7);
         if (!https && !http) {
