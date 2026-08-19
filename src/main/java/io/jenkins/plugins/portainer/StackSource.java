@@ -1,15 +1,10 @@
 package io.jenkins.plugins.portainer;
 
-import net.sf.json.JSONObject;
-
 import java.util.Locale;
 
 /**
  * Stack deploy source for {@code portainerStack}: Git repository (default) or inline YAML.
- * <p>
- * Freestyle {@code f:radioBlock} posts nested {@code {"value":"repository"|"yaml", …}}.
- * Flatten in {@code Descriptor.newInstance} before Stapler bind (same pattern as
- * {@link ConnectionMode}).
+ * Freestyle {@code f:radioBlock inline="true"} and Pipeline both bind a plain string.
  */
 final class StackSource {
 
@@ -27,11 +22,10 @@ final class StackSource {
         if (raw == null || raw.isBlank()) {
             return defaultMode;
         }
-        String v = ConnectionMode.unwrapRadioBlockMode(raw.trim()).toLowerCase(Locale.ROOT);
+        String v = raw.trim().toLowerCase(Locale.ROOT);
         if (REPOSITORY.equals(v) || YAML.equals(v)) {
             return v;
         }
-        // Aliases for Pipeline convenience
         if ("git".equals(v) || "repo".equals(v)) {
             return REPOSITORY;
         }
@@ -47,21 +41,5 @@ final class StackSource {
 
     static boolean isRepository(String mode) {
         return !isYaml(mode);
-    }
-
-    /**
-     * Flatten Freestyle {@code stackSource} radioBlock into a string mode + top-level nested fields.
-     */
-    static void flattenRadioBlock(JSONObject formData) {
-        ConnectionMode.flattenRadioBlock(
-                formData,
-                "stackSource",
-                REPOSITORY,
-                StackSource::normalize,
-                "repositoryUrl",
-                "composeFilePath",
-                "gitCredentialsId",
-                "repositoryReferenceName",
-                "stackFileContent");
     }
 }

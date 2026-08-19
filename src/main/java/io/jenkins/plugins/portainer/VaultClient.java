@@ -27,7 +27,8 @@ import java.util.logging.Logger;
 /**
  * Minimal HashiCorp Vault HTTP client: AppRole login + KV v2 read + revoke-self.
  * Never logs tokens, secret_id, or secret values. Does not cache client tokens across calls.
- * One {@link HttpClient} per instance; close after the step / probe finishes.
+ * One {@link HttpClient} per instance. {@link #close()} is a no-op: Java 17 {@link HttpClient}
+ * has no {@code close()} (added in 21).
  */
 final class VaultClient implements AutoCloseable {
 
@@ -56,7 +57,7 @@ final class VaultClient implements AutoCloseable {
 
     @Override
     public void close() {
-        http.close();
+        // Java 17 HttpClient is not AutoCloseable.
     }
 
     /**

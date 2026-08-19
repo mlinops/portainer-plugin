@@ -15,8 +15,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
 
 /**
  * Reads a single relative file from a Git repository via shallow {@code git clone}.
@@ -27,48 +25,11 @@ import java.util.function.Function;
  */
 final class GitRepositoryFiles {
 
-    /** When non-null, {@link #readFile} returns this result instead of cloning. */
-    static final AtomicReference<Function<FetchRequest, String>> testOverride = new AtomicReference<>();
-
-    /** When non-null, {@link #listConfigFiles} returns this result instead of cloning. */
-    @FunctionalInterface
-    interface ListConfigFilesOverride {
-        List<SwarmConfigFile> apply(ListRequest req) throws IOException;
-    }
-
-    static final AtomicReference<ListConfigFilesOverride> listTestOverride = new AtomicReference<>();
-
     private static final String ASKPASS_USERNAME_FILE = "askpass.username";
     private static final String ASKPASS_PASSWORD_FILE = "askpass.password";
     private static final String UTF_8 = StandardCharsets.UTF_8.name();
 
     private GitRepositoryFiles() {
-    }
-
-    static final class FetchRequest {
-        final String repositoryUrl;
-        final String reference;
-        final String relativePath;
-
-        FetchRequest(String repositoryUrl, String reference, String relativePath) {
-            this.repositoryUrl = repositoryUrl;
-            this.reference = reference;
-            this.relativePath = relativePath;
-        }
-    }
-
-    static final class ListRequest {
-        final String repositoryUrl;
-        final String reference;
-        final String configPath;
-        final String fileGlob;
-
-        ListRequest(String repositoryUrl, String reference, String configPath, String fileGlob) {
-            this.repositoryUrl = repositoryUrl;
-            this.reference = reference;
-            this.configPath = configPath;
-            this.fileGlob = fileGlob;
-        }
     }
 
     /**
@@ -106,11 +67,6 @@ final class GitRepositoryFiles {
         String repo = GitRepositoryUrl.normalize(repositoryUrl);
         String path = PortainerComposePath.normalize(relativePath, "Values file path");
         String ref = defaultGitReference(reference);
-
-        Function<FetchRequest, String> override = testOverride.get();
-        if (override != null) {
-            return override.apply(new FetchRequest(repo, ref, path));
-        }
         ConnectionTester.assertHostAllowed(repo, ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
         requireCloneContext(ctx.workspace, ctx.launcher, "Helm values");
 
@@ -149,11 +105,6 @@ final class GitRepositoryFiles {
         String dir = SwarmConfigNaming.normalizeConfigPath(configPath);
         String glob = SwarmConfigNaming.normalizeFileGlob(fileGlob);
         String ref = defaultGitReference(reference);
-
-        ListConfigFilesOverride override = listTestOverride.get();
-        if (override != null) {
-            return override.apply(new ListRequest(repo, ref, dir, glob));
-        }
         ConnectionTester.assertHostAllowed(repo, ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
         requireCloneContext(ctx.workspace, ctx.launcher, "Swarm configs");
 

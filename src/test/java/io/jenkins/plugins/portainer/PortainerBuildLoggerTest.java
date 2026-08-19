@@ -256,4 +256,45 @@ class PortainerBuildLoggerTest {
         assertNull(PortainerBuildLogger.repoHost(" "));
         assertNull(PortainerBuildLogger.repoHost("not-a-url"));
     }
+
+    @Test
+    void infoGoesToConsoleNotJulInfo() throws Exception {
+        Logger jul = Logger.getLogger("PortainerBuildLoggerTest.infoJul");
+        Level previous = jul.getLevel();
+        jul.setLevel(Level.ALL);
+        java.util.List<java.util.logging.LogRecord> records = new java.util.ArrayList<>();
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        jul.addHandler(handler);
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        try (StreamTaskListener listener = new StreamTaskListener(buf, StandardCharsets.UTF_8);
+                PortainerBuildLogger log = new PortainerBuildLogger(jul, listener, false)) {
+            log.open(PortainerBuildLogger.TITLE_STACK);
+            log.info("stack name=demo");
+            log.warn("soft prune");
+        } finally {
+            jul.removeHandler(handler);
+            jul.setLevel(previous);
+        }
+        String console = buf.toString(StandardCharsets.UTF_8);
+        assertTrue(console.contains("[INFO] Stack name=demo"));
+        assertTrue(console.contains("[WARN] Soft prune"));
+        assertTrue(records.stream().noneMatch(r -> r.getLevel() == Level.INFO));
+        assertTrue(records.stream().anyMatch(
+                r -> r.getLevel() == Level.FINE && r.getMessage().contains("Stack name=demo")));
+        assertTrue(records.stream().anyMatch(
+                r -> r.getLevel() == Level.WARNING && r.getMessage().contains("Soft prune")));
+    }
 }

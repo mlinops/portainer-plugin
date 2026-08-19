@@ -9,7 +9,6 @@ import hudson.Launcher;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
-import hudson.model.Descriptor;
 import hudson.model.Item;
 import hudson.model.Run;
 import hudson.model.TaskListener;
@@ -19,12 +18,10 @@ import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
 import jenkins.tasks.SimpleBuildStep;
 import org.jenkinsci.Symbol;
-import net.sf.json.JSONObject;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
-import org.kohsuke.stapler.StaplerRequest2;
 import org.kohsuke.stapler.verb.POST;
 
 import java.io.IOException;
@@ -155,8 +152,7 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     }
 
     /**
-     * Pipeline / XStream string ({@code repository}|{@code yaml}). Freestyle radioBlock JSON is
-     * flattened in {@link DescriptorImpl#newInstance} before this setter runs.
+     * Pipeline / XStream / Freestyle string ({@code repository}|{@code yaml}).
      */
     @DataBoundSetter
     public void setStackSource(String stackSource) {
@@ -259,8 +255,7 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     }
 
     /**
-     * Pipeline / XStream string mode ({@code inherit}|{@code manual}). Freestyle radioBlock JSON is
-     * flattened in {@link DescriptorImpl#newInstance} before this setter runs. Unknown values
+     * Pipeline / XStream / Freestyle string mode ({@code inherit}|{@code manual}). Unknown values
      * (including Vault {@code none}) fall back to Inherit for Portainer.
      */
     @DataBoundSetter
@@ -309,8 +304,7 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     }
 
     /**
-     * Pipeline / XStream string mode ({@code inherit}|{@code manual}|{@code none}). Freestyle
-     * radioBlock JSON is flattened in {@link DescriptorImpl#newInstance} before this setter runs.
+     * Pipeline / XStream / Freestyle string mode ({@code inherit}|{@code manual}|{@code none}).
      */
     @DataBoundSetter
     public void setVaultConnectionMode(String vaultConnectionMode) {
@@ -409,12 +403,9 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             @NonNull Run<?, ?> run,
             @NonNull EnvVars buildEnv,
             @NonNull TaskListener listener) throws InterruptedException, IOException {
-        PortainerBuildLogger log = new PortainerBuildLogger(LOGGER, listener, verboseLogging);
-        log.open(PortainerBuildLogger.TITLE_STACK);
-        try {
+        try (PortainerBuildLogger log = new PortainerBuildLogger(LOGGER, listener, verboseLogging)) {
+            log.open(PortainerBuildLogger.TITLE_STACK);
             performBody(run, buildEnv, log);
-        } finally {
-            log.close();
         }
     }
 
@@ -1020,36 +1011,6 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         @Override
         public String getDisplayName() {
             return "Portainer Stack Deployment";
-        }
-
-        /**
-         * Freestyle {@code f:radioBlock} posts nested {@code {"value":"inherit"|"manual"|"none", …}}.
-         * Flatten to string modes + top-level nested fields before Stapler bind.
-         */
-        @Override
-        public Builder newInstance(StaplerRequest2 req, JSONObject formData) throws Descriptor.FormException {
-            JSONObject data = formData;
-            if (data == null) {
-                data = new JSONObject();
-            }
-            ConnectionMode.flattenRadioBlock(
-                    data,
-                    "portainerConnectionMode",
-                    "portainerUrl",
-                    "portainerCredentialsId");
-            ConnectionMode.flattenRadioBlock(
-                    data,
-                    "vaultConnectionMode",
-                    ConnectionMode.NONE,
-                    ConnectionMode::normalize,
-                    "vaultUrl",
-                    "vaultAppRoleCredentialsId",
-                    "vaultPath",
-                    "vaultMount",
-                    "vaultNamespace",
-                    "vaultVersion");
-            StackSource.flattenRadioBlock(data);
-            return super.newInstance(req, data);
         }
 
         /**

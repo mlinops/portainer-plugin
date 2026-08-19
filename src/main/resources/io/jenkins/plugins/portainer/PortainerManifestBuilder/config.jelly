@@ -10,7 +10,7 @@
     </f:entry>
     <f:entry title="${%Manifest source}" help="${descriptor.getHelpFile('stackSource')}"/>
     <j:set var="help" value="${null}"/>
-    <f:radioBlock name="stackSource" value="repository" title="${%Repository}"
+    <f:radioBlock inline="true" name="stackSource" value="repository" title="${%Repository}"
                   checked="${instance == null || instance.stackSource != 'yaml'}">
       <f:entry title="${%Repository URL}" field="repositoryUrl">
         <f:textbox/>
@@ -25,7 +25,7 @@
         <f:textbox default="refs/heads/main"/>
       </f:entry>
     </f:radioBlock>
-    <f:radioBlock name="stackSource" value="yaml" title="${%Manual YAML}"
+    <f:radioBlock inline="true" name="stackSource" value="yaml" title="${%Manual YAML}"
                   checked="${instance != null &amp;&amp; instance.stackSource == 'yaml'}">
       <f:entry title="${%Manifest YAML}" field="stackFileContent">
         <f:textarea/>

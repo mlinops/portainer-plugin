@@ -22,13 +22,13 @@
     </f:entry>
     <f:entry title="${%Values source}" help="${descriptor.getHelpFile('valuesSource')}"/>
     <j:set var="help" value="${null}"/>
-    <f:radioBlock name="valuesSource" value="none" title="${%No source}"
+    <f:radioBlock inline="true" name="valuesSource" value="none" title="${%No source}"
                   checked="${instance == null || instance.valuesSource == 'none'}">
       <f:entry>
         <f:description>${%Use chart defaults.}</f:description>
       </f:entry>
     </f:radioBlock>
-    <f:radioBlock name="valuesSource" value="repository" title="${%Repository}"
+    <f:radioBlock inline="true" name="valuesSource" value="repository" title="${%Repository}"
                   checked="${instance != null &amp;&amp; instance.valuesSource == 'repository'}">
       <f:entry title="${%Repository URL}" field="valuesRepositoryUrl">
         <f:textbox/>
@@ -43,7 +43,7 @@
         <f:textbox default="refs/heads/main"/>
       </f:entry>
     </f:radioBlock>
-    <f:radioBlock name="valuesSource" value="yaml" title="${%Manual YAML}"
+    <f:radioBlock inline="true" name="valuesSource" value="yaml" title="${%Manual YAML}"
                   checked="${instance != null &amp;&amp; instance.valuesSource == 'yaml'}">
       <f:entry title="${%Values YAML}" field="values">
         <f:textarea/>

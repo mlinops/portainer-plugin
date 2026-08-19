@@ -4,13 +4,13 @@
   <f:entry title="${%Portainer}" help="${descriptor.getHelpFile('portainerConnectionMode')}"/>
   <!-- radioBlock uses ${help} from scope; clear so option rows do not inherit section help -->
   <j:set var="help" value="${null}"/>
-  <f:radioBlock name="portainerConnectionMode" value="inherit" title="${%Inherit from System}"
+  <f:radioBlock inline="true" name="portainerConnectionMode" value="inherit" title="${%Inherit from System}"
                 checked="${instance == null || instance.portainerConnectionMode != 'manual'}">
     <f:entry>
       <f:description>${descriptor.portainerConnectionSummary}</f:description>
     </f:entry>
   </f:radioBlock>
-  <f:radioBlock name="portainerConnectionMode" value="manual" title="${%Manual}"
+  <f:radioBlock inline="true" name="portainerConnectionMode" value="manual" title="${%Manual}"
                 checked="${instance != null &amp;&amp; instance.portainerConnectionMode == 'manual'}">
     <f:entry title="${%Portainer URL}" field="portainerUrl">
       <f:textbox clazz="required"/>
