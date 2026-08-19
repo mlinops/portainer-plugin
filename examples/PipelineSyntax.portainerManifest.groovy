@@ -1,16 +1,8 @@
-// Pipeline example for Portainer Manifest Deployment build step (symbol: portainerManifest)
+// Pipeline example for Portainer Manifest Deployment (symbol: portainerManifest)
 //
-// Prerequisites:
-//   1. Manage Jenkins → Credentials → Secret text with Portainer Access token
-//   2. Manage Jenkins → System → Portainer (Inherit):
-//        Portainer URL: https://portainer.example:9443
-//        API key credentials: the Secret text above
-//   3. endpointId must be a Kubernetes environment (Type 5/6/7)
-//
-// Upsert: create Kubernetes stack if missing; update file content or Git ref if present.
+// Namespace is defined in the YAML / Git file, not on this step.
 // Hosts: portainer.example / gitlab.example only
-//
-// No agent: Manifest talks to Portainer on the controller (requiresWorkspace=false).
+// No agent: requiresWorkspace=false.
 
 pipeline {
     agent none
@@ -20,13 +12,13 @@ pipeline {
                 portainerManifest(
                     endpointId: '2',
                     stackName: 'demo-web',
-                    namespace: 'default',
                     stackSource: 'yaml',
                     stackFileContent: '''
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: demo-web
+  namespace: apps
 spec:
   replicas: 1
   selector:
@@ -47,11 +39,8 @@ spec:
         stage('Apply manifest (Repository)') {
             steps {
                 portainerManifest(
-                    // portainerConnectionMode: 'inherit',
                     endpointId: '2',
                     stackName: 'demo-web',
-                    namespace: 'apps',
-                    // ensureNamespace: true,  // default; set false to skip
                     repositoryUrl: 'https://gitlab.example/group/manifests.git',
                     manifestFilePath: 'examples/stacks/kubernetes-manifest.yaml',
                     repositoryReferenceName: 'refs/heads/main',
@@ -59,18 +48,18 @@ spec:
                 )
             }
         }
-        stage('Validate only (no Portainer mutate)') {
+        stage('Validate only') {
             steps {
                 portainerManifest(
                     endpointId: '2',
                     stackName: 'demo-web',
-                    namespace: 'default',
                     stackSource: 'yaml',
                     stackFileContent: '''
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: demo-web
+  namespace: apps
 ''',
                     validateOnly: true
                 )

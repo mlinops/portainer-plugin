@@ -512,11 +512,11 @@ public class PortainerClientTest {
     }
 
     @Test
-    public void createKubernetesStackFromString_sendsStackNameAndNamespace() throws Exception {
+    public void createKubernetesStackFromString_sendsStackNameWithoutNamespace() throws Exception {
         try (PortainerClient client = new PortainerClient(2000, 2000)) {
         PortainerClient.KubernetesFromStringRequest req =
                 new PortainerClient.KubernetesFromStringRequest(
-                        "web", "apiVersion: v1\nkind: ConfigMap\n", "apps");
+                        "web", "apiVersion: v1\nkind: ConfigMap\n");
         JsonNode created = client.createKubernetesStackFromString(base, "api-key", 1, req);
         assertEquals("ok", created.path("Output").asText());
         assertEquals("POST", lastMethod.get());
@@ -524,7 +524,7 @@ public class PortainerClientTest {
         assertTrue(lastQuery.get().contains("endpointId=1"));
         JsonNode body = MAPPER.readTree(lastBody.get());
         assertEquals("web", body.path("StackName").asText());
-        assertEquals("apps", body.path("Namespace").asText());
+        assertFalse(body.has("Namespace"));
         assertTrue(body.path("StackFileContent").asText().contains("ConfigMap"));
         assertFalse(body.has("TLSSkipVerify"));
         }
@@ -535,7 +535,7 @@ public class PortainerClientTest {
         try (PortainerClient client = new PortainerClient(2000, 2000)) {
             PortainerClient.KubernetesFromStringRequest req =
                     new PortainerClient.KubernetesFromStringRequest(
-                            "", "apiVersion: v1\nkind: ConfigMap\n", "default");
+                            "", "apiVersion: v1\nkind: ConfigMap\n");
             client.createKubernetesStackFromString(base, "api-key", 1, req);
             JsonNode body = MAPPER.readTree(lastBody.get());
             assertFalse(body.has("StackName"));
@@ -551,7 +551,6 @@ public class PortainerClientTest {
                 "https://gitlab.example/group/m.git",
                 "deploy.yaml",
                 "refs/heads/main",
-                "default",
                 "u",
                 "p");
         client.createKubernetesStackFromRepository(base, "k", 1, req);
@@ -917,8 +916,34 @@ public class PortainerClientTest {
         assertTrue(detail.length() > 200);
         String json = MAPPER.writeValueAsString(MAPPER.createObjectNode().put("message", detail));
         String extracted = PortainerClient.extractErrorDetail(json.getBytes(StandardCharsets.UTF_8));
-        assertEquals(detail, extracted);
+        assertEquals(
+                "failed to deploy kubernetes stack: failed to execute kubectl apply command: "
+                        + "failed to apply resources: failed to create Deployment test-nginx/nginx-demo: "
+                        + "namespaces \"test-nginx\" not found",
+                extracted);
+        assertFalse(extracted.contains("failed to apply resource:"));
         assertFalse(extracted.endsWith("…"));
+    }
+
+    @Test
+    public void extractErrorDetail_joinsKubectlApplyResourceCausesOnce() throws Exception {
+        String detail = "Failed to deploy kubernete stack: failed to execute kubectl apply command: "
+                + "failed to apply resources: failed to apply resource: "
+                + "failed to create Deployment jenkins-auto-nginx/nginx-manifest: "
+                + "namespaces \"jenkins-auto-nginx\" not found\n"
+                + "failed to apply resource: failed to create Service jenkins-auto-nginx/nginx-manifest: "
+                + "namespaces \"jenkins-auto-nginx\" not found";
+        String json = MAPPER.writeValueAsString(MAPPER.createObjectNode().put("message", detail));
+        String extracted = PortainerClient.extractErrorDetail(json.getBytes(StandardCharsets.UTF_8));
+        assertEquals(
+                "Failed to deploy kubernete stack: failed to execute kubectl apply command: "
+                        + "failed to apply resources: failed to create Deployment jenkins-auto-nginx/nginx-manifest: "
+                        + "namespaces \"jenkins-auto-nginx\" not found; "
+                        + "failed to create Service jenkins-auto-nginx/nginx-manifest: "
+                        + "namespaces \"jenkins-auto-nginx\" not found",
+                extracted);
+        assertFalse(extracted.contains("failed to apply resource:"));
+        assertTrue(extracted.contains("failed to apply resources:"));
     }
 
     @Test

@@ -26,6 +26,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 /**
  * Minimal Portainer HTTP client (API ≥ 2.39.3). Auth: {@code X-API-Key}.
@@ -51,6 +52,10 @@ final class PortainerClient implements AutoCloseable {
     private static final String JSON_REPOSITORY_AUTHENTICATION = "RepositoryAuthentication";
     private static final String JSON_REPOSITORY_USERNAME = "RepositoryUsername";
     private static final String JSON_REPOSITORY_PASSWORD = "RepositoryPassword";
+    /** Portainer kubectl apply repeats this prefix once per object. */
+    private static final Pattern APPLY_RESOURCE_PREFIX =
+            Pattern.compile("(?i)\\s*failed to apply resource:\\s*");
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     private final int readTimeoutMs;
     private final PortainerBuildLogger buildLog;
@@ -382,9 +387,6 @@ final class PortainerClient implements AutoCloseable {
             body.put(JSON_STACK_NAME, request.stackName.trim());
         }
         body.put(JSON_STACK_FILE_CONTENT, request.stackFileContent == null ? "" : request.stackFileContent);
-        if (request.namespace != null && !request.namespace.isBlank()) {
-            body.put(JSON_NAMESPACE, request.namespace.trim());
-        }
         return httpJson("POST", url, apiKey, body, null);
     }
 
@@ -406,9 +408,6 @@ final class PortainerClient implements AutoCloseable {
         }
         body.put("RepositoryURL", request.repositoryUrl);
         body.put("ManifestFile", request.manifestFile == null ? "" : request.manifestFile.trim());
-        if (request.namespace != null && !request.namespace.isBlank()) {
-            body.put(JSON_NAMESPACE, request.namespace.trim());
-        }
         if (request.repositoryReferenceName != null && !request.repositoryReferenceName.isBlank()) {
             body.put(JSON_REPOSITORY_REFERENCE_NAME, request.repositoryReferenceName.trim());
         }
@@ -533,6 +532,54 @@ final class PortainerClient implements AutoCloseable {
             }
             throw mapEnsureNamespaceError(createEx, ns);
         }
+    }
+
+    /**
+     * {@code GET /api/kubernetes/{endpointId}/applications}
+     */
+    JsonNode listApplications(String baseUrl, String apiKey, int endpointId) throws IOException {
+        String base = PortainerUrl.normalizeBaseUrl(baseUrl);
+        String url = base + "/api/kubernetes/" + endpointId + "/applications";
+        JsonNode apps = httpJson("GET", url, apiKey, null, "list applications");
+        if (!apps.isArray()) {
+            throw new IOException("Portainer GET applications did not return an array");
+        }
+        return apps;
+    }
+
+    /**
+     * Whether Portainer reports live Kubernetes applications for the stack.
+     */
+    boolean hasLiveStackResources(
+            String baseUrl, String apiKey, int endpointId, int stackId, String stackName)
+            throws IOException {
+        JsonNode apps = listApplications(baseUrl, apiKey, endpointId);
+        String wantName = stackName == null ? "" : stackName.trim();
+        for (JsonNode app : apps) {
+            if (applicationMatchesStack(app, stackId, wantName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean applicationMatchesStack(JsonNode app, int stackId, String stackName) {
+        if (stackId >= 0) {
+            int appStackId = app.path("StackId").asInt(Integer.MIN_VALUE);
+            if (appStackId == Integer.MIN_VALUE) {
+                appStackId = app.path("StackID").asInt(Integer.MIN_VALUE);
+            }
+            if (appStackId == stackId) {
+                return true;
+            }
+        }
+        if (!stackName.isBlank()) {
+            String name = firstNonBlank(text(app, "StackName"), text(app, "Name"));
+            if (stackName.equals(name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static IOException mapEnsureNamespaceError(IOException e, String namespace) {
@@ -1328,7 +1375,41 @@ final class PortainerClient implements AutoCloseable {
                 "(?i)(x-api-key|api[_-]?key|authorization|bearer|token|password|secret[_-]?id)\\s*[:=]\\s*\\S+",
                 "$1=[redacted]");
         s = s.replaceAll("ptr_[A-Za-z0-9/+._=-]{8,}", "ptr_[redacted]");
-        return s;
+        return compactKubectlApplyDetail(s);
+    }
+
+    /**
+     * Drop repeated {@code failed to apply resource:} prefixes from Portainer kubectl errors.
+     * Keeps {@code failed to apply resources:} once and joins per-object causes with {@code ; }.
+     */
+    static String compactKubectlApplyDetail(String detail) {
+        if (detail == null || detail.isBlank()) {
+            return detail == null ? "" : detail;
+        }
+        if (!APPLY_RESOURCE_PREFIX.matcher(detail).find()) {
+            return detail;
+        }
+        String normalized = WHITESPACE.matcher(detail).replaceAll(" ").trim();
+        String[] parts = APPLY_RESOURCE_PREFIX.split(normalized, -1);
+        String head = parts[0].trim();
+        StringBuilder resources = new StringBuilder();
+        for (int i = 1; i < parts.length; i++) {
+            String part = parts[i].trim();
+            if (part.isEmpty()) {
+                continue;
+            }
+            if (resources.length() > 0) {
+                resources.append("; ");
+            }
+            resources.append(part);
+        }
+        if (resources.length() == 0) {
+            return head;
+        }
+        if (head.isEmpty()) {
+            return resources.toString();
+        }
+        return head + " " + resources;
     }
 
     static boolean isConnectivityMessage(String message) {
@@ -1778,12 +1859,10 @@ final class PortainerClient implements AutoCloseable {
     static final class KubernetesFromStringRequest {
         final String stackName;
         final String stackFileContent;
-        final String namespace;
 
-        KubernetesFromStringRequest(String stackName, String stackFileContent, String namespace) {
+        KubernetesFromStringRequest(String stackName, String stackFileContent) {
             this.stackName = stackName;
             this.stackFileContent = stackFileContent;
-            this.namespace = namespace;
         }
     }
 
@@ -1793,7 +1872,6 @@ final class PortainerClient implements AutoCloseable {
         final String repositoryUrl;
         final String manifestFile;
         final String repositoryReferenceName;
-        final String namespace;
         final String gitUsername;
         /** Ephemeral Portainer API payload; not Jenkins job config. */
         @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
@@ -1804,14 +1882,12 @@ final class PortainerClient implements AutoCloseable {
                 String repositoryUrl,
                 String manifestFile,
                 String repositoryReferenceName,
-                String namespace,
                 String gitUsername,
                 String gitPassword) {
             this.stackName = stackName;
             this.repositoryUrl = repositoryUrl;
             this.manifestFile = manifestFile;
             this.repositoryReferenceName = repositoryReferenceName;
-            this.namespace = namespace;
             this.gitUsername = gitUsername;
             this.gitPassword = gitPassword;
         }

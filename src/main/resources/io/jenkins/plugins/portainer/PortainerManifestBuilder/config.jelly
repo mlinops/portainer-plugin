@@ -8,9 +8,6 @@
     <f:entry title="${%Stack name}" field="stackName">
       <f:textbox/>
     </f:entry>
-    <f:entry title="${%Namespace}" field="namespace">
-      <f:textbox default="default"/>
-    </f:entry>
     <f:entry title="${%Manifest source}" help="${descriptor.getHelpFile('stackSource')}"/>
     <j:set var="help" value="${null}"/>
     <f:radioBlock name="stackSource" value="repository" title="${%Repository}"
@@ -35,9 +32,6 @@
       </f:entry>
     </f:radioBlock>
     <f:advanced title="${%Advanced}">
-      <f:entry title="${%Ensure namespace}" field="ensureNamespace">
-        <f:checkbox checked="${instance == null || instance.ensureNamespace}"/>
-      </f:entry>
       <f:entry title="${%Validate only}" field="validateOnly">
         <f:checkbox/>
       </f:entry>

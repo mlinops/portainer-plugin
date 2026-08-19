@@ -50,7 +50,7 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
 
     public static final String MODE_INHERIT = ConnectionMode.INHERIT;
     public static final String MODE_MANUAL = ConnectionMode.MANUAL;
-    public static final String DEFAULT_NAMESPACE = PortainerManifestBuilder.DEFAULT_NAMESPACE;
+    public static final String DEFAULT_NAMESPACE = KubernetesNamespaces.DEFAULT;
     public static final String DEFAULT_VALUES_FILE = "values.yaml";
     public static final String VALUES_NONE = HelmValuesSource.NONE;
     public static final String VALUES_REPOSITORY = HelmValuesSource.REPOSITORY;
@@ -386,7 +386,7 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
             return name;
         });
         final String expandedNamespace = PortainerConnections.abortOn(
-                log, () -> PortainerManifestBuilder.resolveNamespace(namespace, buildEnv));
+                log, () -> KubernetesNamespaces.resolve(namespace, buildEnv));
         PortainerConnections.abortOn(log, () -> {
             if (chart == null || chart.isBlank()) {
                 throw new IllegalArgumentException("Helm chart name is required.");
@@ -893,7 +893,7 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
             if (value.trim().indexOf('$') >= 0) {
                 return FormValidation.ok();
             }
-            String err = PortainerManifestBuilder.validateNamespace(value);
+            String err = KubernetesNamespaces.validate(value);
             return err == null ? FormValidation.ok() : FormValidation.error(err);
         }
 

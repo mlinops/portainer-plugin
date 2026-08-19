@@ -56,8 +56,6 @@ Kubernetes environment only. Freestyle step: **Portainer Manifest Deployment**; 
 portainerManifest(
     endpointId: '2',
     stackName: 'nginx-demo',
-    namespace: 'default',
-    // ensureNamespace: false,  // default true: create NS via Portainer if missing
     repositoryUrl: 'https://gitlab.example/group/manifests.git',
     manifestFilePath: 'examples/stacks/kubernetes-manifest.yaml',
     repositoryReferenceName: 'refs/heads/main',
@@ -65,6 +63,6 @@ portainerManifest(
 )
 ```
 
-Full pipeline sample (including Manual YAML): `../PipelineSyntax.portainerManifest.groovy`.
+Full pipeline sample: `../PipelineSyntax.portainerManifest.groovy`.
 
-**Ensure namespace:** on by default (Freestyle Advanced → **Ensure namespace** / Pipeline omit or `ensureNamespace: true`). Calls Portainer `GET/POST /api/kubernetes/{endpointId}/namespaces…` before deploy. Existing NS is a no-op; missing NS is created; HTTP 409 (race) is treated as ready. Requires cluster create-namespace permission. Set `ensureNamespace: false` to skip. Not run when `validateOnly: true` (logs `would ensure namespace=…` only).
+**Namespace:** set in the manifest file (`metadata.namespace` or `kind: Namespace`). The step has no Namespace field and does not send one to Portainer. If Portainer stack metadata exists but live Kubernetes resources do not, the build fails; remove the stale stack in Portainer and retry.
