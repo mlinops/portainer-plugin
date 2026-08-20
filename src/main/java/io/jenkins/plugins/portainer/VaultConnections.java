@@ -15,9 +15,6 @@ import java.io.IOException;
  */
 final class VaultConnections {
 
-    /** When true, Vault network preflight is skipped (unit tests). */
-    static volatile boolean testSkipPreflight;
-
     private VaultConnections() {
     }
 
@@ -40,11 +37,6 @@ final class VaultConnections {
         }
 
         req.log.info("Preflight check of Vault");
-
-        if (testSkipPreflight || PortainerSwarmSecretBuilder.testVaultOverride != null) {
-            return;
-        }
-
         probeVault(req, mode, urlRaw, namespace);
     }
 

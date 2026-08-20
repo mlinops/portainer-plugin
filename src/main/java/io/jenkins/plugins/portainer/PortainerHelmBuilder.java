@@ -9,7 +9,6 @@ import hudson.Launcher;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
-import hudson.model.Descriptor;
 import hudson.model.Item;
 import hudson.model.Run;
 import hudson.model.TaskListener;
@@ -18,13 +17,11 @@ import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
 import jenkins.tasks.SimpleBuildStep;
-import net.sf.json.JSONObject;
 import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
-import org.kohsuke.stapler.StaplerRequest2;
 import org.kohsuke.stapler.verb.POST;
 
 import java.io.IOException;
@@ -81,6 +78,10 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
     private boolean verboseLogging;
     /** When true, preflight + field checks only — no list/install/uninstall / ensure-NS. */
     private boolean validateOnly;
+
+    /** Null uses {@link GitRepositoryFiles#readFile}. */
+    transient GitRepositoryFiles.Reader gitReader;
+
     /**
      * When true, ensure the target Kubernetes namespace exists via Portainer before install
      * ({@code GET/POST /api/kubernetes/{id}/namespaces…}). Default true; skipped when {@code validateOnly}.
@@ -314,12 +315,9 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
             FilePath workspace,
             Launcher launcher,
             @NonNull TaskListener listener) throws InterruptedException, IOException {
-        PortainerBuildLogger log = new PortainerBuildLogger(LOGGER, listener, verboseLogging);
-        log.open(PortainerBuildLogger.TITLE_HELM);
-        try {
+        try (PortainerBuildLogger log = new PortainerBuildLogger(LOGGER, listener, verboseLogging)) {
+            log.open(PortainerBuildLogger.TITLE_HELM);
             performBody(run, buildEnv, workspace, launcher, listener, log);
-        } finally {
-            log.close();
         }
     }
 
@@ -572,7 +570,8 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         String gitRef = resolveValuesGitRef(request.buildEnv, request.precomputed);
         PortainerCredentials.GitAuth gitAuth =
                 PortainerConnections.resolveOptionalGitAuth(valuesGitCredentialsId, request.item);
-        String content = GitRepositoryFiles.readFile(
+        GitRepositoryFiles.Reader reader = gitReader != null ? gitReader : GitRepositoryFiles::readFile;
+        String content = reader.readFile(
                 repoUrl,
                 gitRef,
                 path,
@@ -812,21 +811,6 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         @Override
         public String getDisplayName() {
             return "Portainer Helm Deployment";
-        }
-
-        @Override
-        public Builder newInstance(StaplerRequest2 req, JSONObject formData) throws Descriptor.FormException {
-            JSONObject data = formData;
-            if (data == null) {
-                data = new JSONObject();
-            }
-            ConnectionMode.flattenRadioBlock(
-                    data,
-                    "portainerConnectionMode",
-                    "portainerUrl",
-                    "portainerCredentialsId");
-            HelmValuesSource.flattenRadioBlock(data);
-            return super.newInstance(req, data);
         }
 
         public String getPortainerConnectionSummary() {

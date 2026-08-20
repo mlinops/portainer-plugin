@@ -30,7 +30,8 @@ import java.util.regex.Pattern;
 
 /**
  * Minimal Portainer HTTP client (API ≥ 2.39.3). Auth: {@code X-API-Key}.
- * One {@link HttpClient} per instance; close after the step / probe finishes.
+ * One {@link HttpClient} per instance. {@link #close()} is a no-op: Java 17 {@link HttpClient}
+ * has no {@code close()} (added in 21).
  */
 final class PortainerClient implements AutoCloseable {
 
@@ -76,7 +77,7 @@ final class PortainerClient implements AutoCloseable {
 
     @Override
     public void close() {
-        http.close();
+        // Java 17 HttpClient is not AutoCloseable.
     }
 
     /**

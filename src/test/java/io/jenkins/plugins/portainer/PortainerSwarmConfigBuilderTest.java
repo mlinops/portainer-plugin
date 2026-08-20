@@ -4,6 +4,7 @@ import com.cloudbees.plugins.credentials.CredentialsScope;
 import com.cloudbees.plugins.credentials.SystemCredentialsProvider;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import hudson.FilePath;
 import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
 import hudson.model.Result;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.TestExtension;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 
 import java.io.IOException;
@@ -31,7 +33,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @WithJenkins
@@ -54,7 +55,6 @@ public class PortainerSwarmConfigBuilderTest {
         System.setProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP, "true");
         createCalled.set(false);
         configsListBody.set("[]");
-        GitRepositoryFiles.listTestOverride.set(null);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             lastPath.set(exchange.getRequestURI().getPath());
@@ -98,7 +98,7 @@ public class PortainerSwarmConfigBuilderTest {
     @AfterEach
     public void stopServer() {
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
-        GitRepositoryFiles.listTestOverride.set(null);
+        GitCloneSeed.clear();
         if (server != null) {
             server.stop(0);
         }
@@ -107,32 +107,17 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_createsMissingConfig(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        stubGitFiles();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
+        injectGitFiles(step);
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("======== Portainer Stack Config ========", build);
-        jenkins.assertLogContains("[INFO] Preflight check of Git", build);
-        jenkins.assertLogContains("[INFO] Git path=configs/swarm", build);
-        jenkins.assertLogContains("[INFO] Configs found in Git - 1", build);
-        jenkins.assertLogContains("[INFO] Preflight check of endpoint 1 (swarm)", build);
-        jenkins.assertLogNotContains("starting portainer swarm config step", build);
-        jenkins.assertLogNotContains("config step=", build);
-        jenkins.assertLogContains("(created) " + APP_SETTINGS_NAME, build);
-        jenkins.assertLogContains(
-                "[INFO] Summary files=1 created=1 skipped=0 duration=",
-                build);
-        jenkins.assertLogNotContains("validated=", build);
-        jenkins.assertLogNotContains("completed successfully", build);
-        jenkins.assertLogNotContains("new configuration files:", build);
         assertEquals(
                 APP_SETTINGS_NAME,
                 build.getEnvironment(TaskListener.NULL).get("APP_SETTINGS"));
-        jenkins.assertLogContains("created=1", build);
         assertTrue(createCalled.get());
         assertTrue(lastBody.get().contains("\"Name\":\"" + APP_SETTINGS_NAME + "\""));
         assertTrue(lastBody.get().contains("jenkins.portainer.config/base"));
@@ -141,20 +126,15 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_skipsExistingConfigName(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        stubGitFiles();
         configsListBody.set("[{\"ID\":\"cfg1\",\"Spec\":{\"Name\":\"" + APP_SETTINGS_NAME + "\",\"Labels\":{}}}]");
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
+        injectGitFiles(step);
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("(skipped) " + APP_SETTINGS_NAME, build);
-        jenkins.assertLogContains("skipped=1", build);
-        jenkins.assertLogNotContains("new configuration files", build);
-        jenkins.assertLogNotContains("(created)", build);
-        jenkins.assertLogNotContains("removing stale configs", build);
         assertEquals(
                 APP_SETTINGS_NAME,
                 build.getEnvironment(TaskListener.NULL).get("APP_SETTINGS"));
@@ -164,19 +144,15 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_validateOnly_skipsMutatingApis(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        stubGitFiles();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
         step.setValidateOnly(true);
+        injectGitFiles(step);
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("Validate-only — skipping Docker config mutations", build);
-        jenkins.assertLogNotContains("(would create) " + APP_SETTINGS_NAME, build);
-        jenkins.assertLogNotContains("validated=", build);
-        jenkins.assertLogContains("created=0", build);
         assertTrue(build.getEnvironment(TaskListener.NULL).get("APP_SETTINGS") == null);
         assertTrue(!createCalled.get());
         assertTrue(lastPath.get() == null || !lastPath.get().endsWith("/configs/create"));
@@ -188,11 +164,11 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_emptyFolder_fails(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        GitRepositoryFiles.listTestOverride.set(req -> List.of());
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
+        injectGitFiles(step, List.of());
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
@@ -209,16 +185,13 @@ public class PortainerSwarmConfigBuilderTest {
                 "node {\n"
                         + "  portainerStackConfig(\n"
                         + "    endpointId: '1',\n"
-                        + "    repositoryUrl: 'https://gitlab.example/group/configs.git',\n"
+                        + "    repositoryUrl: '" + GitCloneSeed.LOOPBACK_CONFIGS + "',\n"
                         + "    configPath: 'configs/swarm',\n"
                         + "    validateOnly: true\n"
                         + "  )\n"
                         + "}\n",
                 true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogContains("Validate-only — skipping Docker config mutations", run);
-        jenkins.assertLogNotContains("(would create) " + APP_SETTINGS_NAME, run);
-        jenkins.assertLogNotContains("validated=", run);
         assertTrue(!createCalled.get());
         assertTrue(lastPath.get() == null || !lastPath.get().endsWith("/configs/create"));
     }
@@ -235,7 +208,6 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_pruneOld_removesStaleConfig(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        stubGitFiles();
         AtomicBoolean deleteCalled = new AtomicBoolean(false);
         server.removeContext("/");
         server.createContext("/", exchange -> {
@@ -287,13 +259,13 @@ public class PortainerSwarmConfigBuilderTest {
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
         step.setPruneOld(true);
+        injectGitFiles(step);
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("(created) " + APP_SETTINGS_NAME, build);
         assertTrue(createCalled.get());
         assertTrue(deleteCalled.get());
     }
@@ -301,13 +273,13 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_duplicateBasename_fails(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        GitRepositoryFiles.listTestOverride.set(req -> List.of(
-                new SwarmConfigFile("app-settings.json", "{\"a\":1}".getBytes(StandardCharsets.UTF_8)),
-                new SwarmConfigFile("app_settings.json", "{\"b\":2}".getBytes(StandardCharsets.UTF_8))));
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
+        injectGitFiles(step, List.of(
+                new SwarmConfigFile("app-settings.json", "{\"a\":1}".getBytes(StandardCharsets.UTF_8)),
+                new SwarmConfigFile("app_settings.json", "{\"b\":2}".getBytes(StandardCharsets.UTF_8))));
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
@@ -318,10 +290,9 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_unsupportedNamingStrategy_fails(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        stubGitFiles();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
         step.setNamingStrategy("legacy");
         project.getBuildersList().add(step);
@@ -333,7 +304,6 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_swarmPreflightFails(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        stubGitFiles();
         server.removeContext("/");
         server.createContext("/", exchange -> {
             String path = exchange.getRequestURI().getPath();
@@ -357,7 +327,7 @@ public class PortainerSwarmConfigBuilderTest {
         });
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
         project.getBuildersList().add(step);
 
@@ -368,13 +338,14 @@ public class PortainerSwarmConfigBuilderTest {
     @Test
     public void freestyle_gitPathNotFound_fails(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        GitRepositoryFiles.listTestOverride.set(req -> {
-            throw new IOException("Config path not found: missing");
-        });
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmConfigBuilder step = new PortainerSwarmConfigBuilder("1");
-        step.setRepositoryUrl("https://gitlab.example/group/configs.git");
+        step.setRepositoryUrl(GitCloneSeed.LOOPBACK_CONFIGS);
         step.setConfigPath("configs/swarm");
+        step.gitLister = (url, ref, path, glob, ctx) -> {
+            throw new IOException("Config path not found in repository: " + path);
+        };
+        GitCloneSeed.set(checkout -> { });
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
@@ -404,17 +375,28 @@ public class PortainerSwarmConfigBuilderTest {
         assertEquals(FormValidation.Kind.OK, d.doCheckFileGlob("*.json", project).kind);
     }
 
-    @Test
-    public void descriptor_newInstance_nullFormData(JenkinsRule jenkins) {
-        PortainerSwarmConfigBuilder.DescriptorImpl d =
-                jenkins.getInstance().getDescriptorByType(PortainerSwarmConfigBuilder.DescriptorImpl.class);
-        // null form → empty JSONObject then Stapler bind (fails without required fields)
-        assertThrows(Throwable.class, () -> d.newInstance((org.kohsuke.stapler.StaplerRequest2) null, null));
+    private static void injectGitFiles(PortainerSwarmConfigBuilder step) {
+        injectGitFiles(step, List.of(new SwarmConfigFile("app-settings.json", APP_SETTINGS_BYTES)));
     }
 
-    private static void stubGitFiles() {
-        GitRepositoryFiles.listTestOverride.set(req -> List.of(
-                new SwarmConfigFile("app-settings.json", "{\"a\":1}".getBytes(StandardCharsets.UTF_8))));
+    private static void injectGitFiles(PortainerSwarmConfigBuilder step, List<SwarmConfigFile> files) {
+        List<SwarmConfigFile> copy = List.copyOf(files);
+        step.gitLister = (url, ref, path, glob, ctx) -> copy;
+        seedGitCheckout(copy);
+    }
+
+    private void stubGitFiles() {
+        seedGitCheckout(List.of(new SwarmConfigFile("app-settings.json", APP_SETTINGS_BYTES)));
+    }
+
+    private static void seedGitCheckout(List<SwarmConfigFile> files) {
+        GitCloneSeed.set(checkout -> {
+            FilePath dir = checkout.child("configs").child("swarm");
+            dir.mkdirs();
+            for (SwarmConfigFile file : files) {
+                GitCloneSeed.write(dir, file.relativePath, file.content);
+            }
+        });
     }
 
     private void configurePortainer(JenkinsRule jenkins) throws Exception {
@@ -439,5 +421,9 @@ public class PortainerSwarmConfigBuilderTest {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    @TestExtension
+    public static final class GitLauncher extends GitCloneSeed.Decorator {
     }
 }

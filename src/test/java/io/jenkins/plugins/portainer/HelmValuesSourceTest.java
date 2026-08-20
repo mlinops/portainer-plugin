@@ -1,6 +1,5 @@
 package io.jenkins.plugins.portainer;
 
-import net.sf.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,27 +28,7 @@ public class HelmValuesSourceTest {
         assertEquals(HelmValuesSource.NONE, HelmValuesSource.normalize("off"));
         assertEquals(HelmValuesSource.REPOSITORY, HelmValuesSource.normalize("git"));
         assertEquals(HelmValuesSource.YAML, HelmValuesSource.normalize("manual"));
-        assertEquals(HelmValuesSource.NONE, HelmValuesSource.normalize("{\"value\":\"none\"}"));
-    }
-
-    @Test
-    public void flattenRadioBlock_hoistsNestedFields() {
-        JSONObject form = new JSONObject();
-        JSONObject block = new JSONObject();
-        block.put("value", "repository");
-        block.put("valuesRepositoryUrl", "https://gitlab.example/group/values.git");
-        block.put("valuesFilePath", "prod/values.yaml");
-        block.put("valuesGitCredentialsId", "git");
-        block.put("valuesRepositoryReferenceName", "refs/heads/main");
-        form.put("valuesSource", block);
-
-        HelmValuesSource.flattenRadioBlock(form);
-
-        assertEquals(HelmValuesSource.REPOSITORY, form.getString("valuesSource"));
-        assertEquals("https://gitlab.example/group/values.git", form.getString("valuesRepositoryUrl"));
-        assertEquals("prod/values.yaml", form.getString("valuesFilePath"));
-        assertEquals("git", form.getString("valuesGitCredentialsId"));
-        assertEquals("refs/heads/main", form.getString("valuesRepositoryReferenceName"));
+        assertEquals(HelmValuesSource.NONE, HelmValuesSource.normalize("none"));
     }
 
     @Test

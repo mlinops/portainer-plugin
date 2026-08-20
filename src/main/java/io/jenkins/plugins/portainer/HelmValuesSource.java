@@ -1,15 +1,10 @@
 package io.jenkins.plugins.portainer;
 
-import net.sf.json.JSONObject;
-
 import java.util.Locale;
 
 /**
  * Helm values source for {@code portainerHelm}: none (default), Git repository file, or inline YAML.
- * <p>
- * Freestyle {@code f:radioBlock} posts nested {@code {"value":"none"|"repository"|"yaml", …}}.
- * Flatten in {@code Descriptor.newInstance} before Stapler bind (same pattern as
- * {@link StackSource} / {@link ConnectionMode}).
+ * Freestyle {@code f:radioBlock inline="true"} and Pipeline both bind a plain string.
  */
 final class HelmValuesSource {
 
@@ -42,7 +37,7 @@ final class HelmValuesSource {
         if (raw == null || raw.isBlank()) {
             return defaultMode;
         }
-        String v = ConnectionMode.unwrapRadioBlockMode(raw.trim()).toLowerCase(Locale.ROOT);
+        String v = raw.trim().toLowerCase(Locale.ROOT);
         if (NONE.equals(v) || REPOSITORY.equals(v) || YAML.equals(v)) {
             return v;
         }
@@ -72,21 +67,5 @@ final class HelmValuesSource {
 
     static boolean isYaml(String mode) {
         return YAML.equals(normalize(mode));
-    }
-
-    /**
-     * Flatten Freestyle {@code valuesSource} radioBlock into a string mode + top-level nested fields.
-     */
-    static void flattenRadioBlock(JSONObject formData) {
-        ConnectionMode.flattenRadioBlock(
-                formData,
-                "valuesSource",
-                NONE,
-                HelmValuesSource::normalize,
-                "valuesRepositoryUrl",
-                "valuesFilePath",
-                "valuesGitCredentialsId",
-                "valuesRepositoryReferenceName",
-                "values");
     }
 }

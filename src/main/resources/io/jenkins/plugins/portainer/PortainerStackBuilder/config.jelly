@@ -13,7 +13,7 @@
     </f:entry>
     <f:entry title="${%Stack source}" help="${descriptor.getHelpFile('stackSource')}"/>
     <j:set var="help" value="${null}"/>
-    <f:radioBlock name="stackSource" value="repository" title="${%Repository}"
+    <f:radioBlock inline="true" name="stackSource" value="repository" title="${%Repository}"
                   checked="${instance == null || instance.stackSource != 'yaml'}">
       <f:entry title="${%Repository URL}" field="repositoryUrl">
         <f:textbox/>
@@ -28,7 +28,7 @@
         <f:textbox default="refs/heads/main"/>
       </f:entry>
     </f:radioBlock>
-    <f:radioBlock name="stackSource" value="yaml" title="${%Manual YAML}"
+    <f:radioBlock inline="true" name="stackSource" value="yaml" title="${%Manual YAML}"
                   checked="${instance != null &amp;&amp; instance.stackSource == 'yaml'}">
       <f:entry title="${%Stack / compose YAML}" field="stackFileContent">
         <f:textarea/>
@@ -40,31 +40,19 @@
       </f:entry>
       <f:entry title="${%Vault}" help="${descriptor.getHelpFile('vaultConnectionMode')}"/>
       <j:set var="help" value="${null}"/>
-      <f:radioBlock name="vaultConnectionMode" value="none" title="${%Not connected}"
+      <f:radioBlock inline="true" name="vaultConnectionMode" value="none" title="${%Not connected}"
                     checked="${instance == null || instance.vaultConnectionMode == 'none'}">
         <f:entry>
           <f:description>${descriptor.VAULT_NONE_SUMMARY}</f:description>
         </f:entry>
       </f:radioBlock>
-      <f:radioBlock name="vaultConnectionMode" value="inherit" title="${%Inherit from System}"
+      <f:radioBlock inline="true" name="vaultConnectionMode" value="inherit" title="${%Inherit from System}"
                     checked="${instance != null &amp;&amp; instance.vaultConnectionMode == 'inherit'}">
         <f:entry>
           <f:description>${descriptor.vaultInheritSummary}</f:description>
         </f:entry>
-        <f:entry title="${%Vault KV mount}" field="vaultMount">
-          <f:textbox default="secret"/>
-        </f:entry>
-        <f:entry title="${%Vault path}" field="vaultPath">
-          <f:textbox/>
-        </f:entry>
-        <f:entry title="${%Vault namespace Enterprise}" field="vaultNamespace">
-          <f:textbox/>
-        </f:entry>
-        <f:entry title="${%Vault secret version}" field="vaultVersion">
-          <f:textbox/>
-        </f:entry>
       </f:radioBlock>
-      <f:radioBlock name="vaultConnectionMode" value="manual" title="${%Manual}"
+      <f:radioBlock inline="true" name="vaultConnectionMode" value="manual" title="${%Manual}"
                     checked="${instance != null &amp;&amp; instance.vaultConnectionMode == 'manual'}">
         <f:entry title="${%Vault URL}" field="vaultUrl">
           <f:textbox/>
@@ -72,19 +60,20 @@
         <f:entry title="${%Vault AppRole credentials}" field="vaultAppRoleCredentialsId">
           <c:select/>
         </f:entry>
-        <f:entry title="${%Vault KV mount}" field="vaultMount">
-          <f:textbox default="secret"/>
-        </f:entry>
-        <f:entry title="${%Vault path}" field="vaultPath">
-          <f:textbox/>
-        </f:entry>
-        <f:entry title="${%Vault namespace Enterprise}" field="vaultNamespace">
-          <f:textbox/>
-        </f:entry>
-        <f:entry title="${%Vault secret version}" field="vaultVersion">
-          <f:textbox/>
-        </f:entry>
       </f:radioBlock>
+      <!-- One name per field: inline radioBlocks would otherwise submit duplicate keys as JSON arrays. -->
+      <f:entry title="${%Vault KV mount}" field="vaultMount">
+        <f:textbox default="secret"/>
+      </f:entry>
+      <f:entry title="${%Vault path}" field="vaultPath">
+        <f:textbox/>
+      </f:entry>
+      <f:entry title="${%Vault namespace Enterprise}" field="vaultNamespace">
+        <f:textbox/>
+      </f:entry>
+      <f:entry title="${%Vault secret version}" field="vaultVersion">
+        <f:textbox/>
+      </f:entry>
       <f:entry>
         <hr class="jenkins-!-margin-block-3"/>
       </f:entry>

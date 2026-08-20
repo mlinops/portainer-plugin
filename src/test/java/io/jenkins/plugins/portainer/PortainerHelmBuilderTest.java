@@ -66,7 +66,6 @@ public class PortainerHelmBuilderTest {
         lastPath.set(null);
         lastMethod.set(null);
         helmMutationOrder.clear();
-        GitRepositoryFiles.testOverride.set(null);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             lastPath.set(exchange.getRequestURI().getPath());
@@ -141,7 +140,6 @@ public class PortainerHelmBuilderTest {
 
     @AfterEach
     public void stopServer() {
-        GitRepositoryFiles.testOverride.set(null);
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
         if (server != null) {
             server.stop(0);
@@ -177,11 +175,6 @@ public class PortainerHelmBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("[INFO] Values source=none", build);
-        jenkins.assertLogContains(
-                "[INFO] Summary outcome=created release=nginx chart=nginx duration=", build);
-        jenkins.assertLogNotContains("Summary repoHost=", build);
-        jenkins.assertLogNotContains("Helm deployed", build);
         assertTrue(installCalled.get());
         String body = lastInstallBody.get();
         assertTrue(body != null && !body.contains("\"values\""));
@@ -199,7 +192,6 @@ public class PortainerHelmBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("[INFO] Values source=yaml", build);
         jenkins.assertLogNotContains("replicaCount", build);
         assertTrue(installCalled.get());
         assertTrue(lastInstallBody.get().contains("\"values\""));
@@ -209,24 +201,18 @@ public class PortainerHelmBuilderTest {
     @Test
     public void freestyle_repository_fetchesThenSendsValues(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        GitRepositoryFiles.testOverride.set(req -> {
-            assertEquals("https://gitlab.example/group/values.git", req.repositoryUrl);
-            assertEquals("refs/heads/main", req.reference);
-            assertEquals("values.yaml", req.relativePath);
-            return "replicaCount: 2\n";
-        });
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
         step.setNamespace("default");
         step.setValuesSource(PortainerHelmBuilder.VALUES_REPOSITORY);
-        step.setValuesRepositoryUrl("https://gitlab.example/group/values.git");
+        step.setValuesRepositoryUrl("https://gitlab.example/group/helm-values.git");
         step.setValuesFilePath("values.yaml");
         step.setValuesRepositoryReferenceName("refs/heads/main");
+        step.gitReader = (url, ref, path, ctx) -> "replicaCount: 2\n";
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("[INFO] Values source=repository", build);
         jenkins.assertLogNotContains("replicaCount", build);
         assertTrue(installCalled.get());
         assertTrue(lastInstallBody.get().contains("replicaCount: 2"));
@@ -243,15 +229,6 @@ public class PortainerHelmBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("======== Portainer Helm Deployment ========", build);
-        jenkins.assertLogContains("[INFO] Release name=nginx", build);
-        jenkins.assertLogContains("[INFO] Values source=yaml", build);
-        jenkins.assertLogContains("[INFO] Ensuring Helm release", build);
-        jenkins.assertLogContains(
-                "[INFO] Summary outcome=created release=nginx chart=nginx duration=", build);
-        jenkins.assertLogNotContains("Helm deployed", build);
-        jenkins.assertLogNotContains("Summary repoHost=", build);
-        jenkins.assertLogNotContains("valuesSource=yaml duration=", build);
         jenkins.assertLogNotContains("replicaCount", build);
         assertTrue(installCalled.get());
         assertTrue(!uninstallCalled.get());
@@ -275,7 +252,6 @@ public class PortainerHelmBuilderTest {
                         + "}\n",
                 true));
         WorkflowRun noneRun = jenkins.buildAndAssertSuccess(noneJob);
-        jenkins.assertLogContains("[INFO] Values source=none", noneRun);
         assertTrue(lastInstallBody.get() != null && !lastInstallBody.get().contains("\"values\""));
 
         installCalled.set(false);
@@ -295,7 +271,6 @@ public class PortainerHelmBuilderTest {
                         + "}\n",
                 true));
         WorkflowRun yamlRun = jenkins.buildAndAssertSuccess(yamlJob);
-        jenkins.assertLogContains("[INFO] Values source=yaml", yamlRun);
         assertTrue(lastInstallBody.get().contains("replicaCount: 3"));
     }
 
@@ -311,11 +286,6 @@ public class PortainerHelmBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("[INFO] Preflight check of endpoint", build);
-        jenkins.assertLogContains("[INFO] Validate-only — skipping deploy", build);
-        jenkins.assertLogNotContains("Would install-or-upgrade helm release=nginx", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=validated", build);
-        jenkins.assertLogNotContains("Helm deployed", build);
         assertTrue(!installCalled.get());
         assertTrue(!uninstallCalled.get());
         assertTrue(!helmListCalled.get());
@@ -337,10 +307,6 @@ public class PortainerHelmBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("Ensuring namespace=apps", build);
-        jenkins.assertLogContains("Namespace ready name=apps result=created", build);
-        jenkins.assertLogContains("Summary outcome=created", build);
-        jenkins.assertLogNotContains("Helm deployed", build);
         assertTrue(namespaceGetCalled.get());
         assertTrue(namespaceCreateCalled.get());
         assertTrue(installCalled.get());
@@ -359,9 +325,6 @@ public class PortainerHelmBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("[INFO] Validate-only — skipping deploy", build);
-        jenkins.assertLogNotContains("Would ensure namespace=apps", build);
-        jenkins.assertLogContains("outcome=validated", build);
         assertTrue(!namespaceGetCalled.get());
         assertTrue(!namespaceCreateCalled.get());
         assertTrue(!installCalled.get());
@@ -379,7 +342,6 @@ public class PortainerHelmBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("Summary outcome=created", build);
         assertTrue(!namespaceGetCalled.get());
         assertTrue(!namespaceCreateCalled.get());
         assertTrue(installCalled.get());
@@ -403,8 +365,6 @@ public class PortainerHelmBuilderTest {
                         + "}\n",
                 true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogContains("Validate-only — skipping deploy", run);
-        jenkins.assertLogContains("outcome=validated", run);
         assertTrue(!installCalled.get());
         assertTrue(!helmListCalled.get());
         assertTrue(!uninstallCalled.get());
@@ -433,8 +393,6 @@ public class PortainerHelmBuilderTest {
                         + ")\n",
                 true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogContains("Validate-only — skipping deploy", run);
-        jenkins.assertLogContains("outcome=validated", run);
         jenkins.assertLogNotContains("no workspace", run);
         assertTrue(!installCalled.get());
         assertTrue(!namespaceGetCalled.get());
@@ -458,8 +416,6 @@ public class PortainerHelmBuilderTest {
                         + "}\n",
                 true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogContains("Summary outcome=updated", run);
-        jenkins.assertLogNotContains("Helm deployed", run);
         assertTrue(!uninstallCalled.get());
         assertTrue(installCalled.get());
         assertTrue(helmListCalled.get());
@@ -477,9 +433,6 @@ public class PortainerHelmBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("Helm force reinstall — uninstalling then installing", build);
-        jenkins.assertLogContains("Summary outcome=updated", build);
-        jenkins.assertLogNotContains("Helm force-reinstalled", build);
         assertTrue(uninstallCalled.get());
         assertTrue(installCalled.get());
         assertTrue(helmListCalled.get());

@@ -12,7 +12,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Dual-sink build logging: INFO/WARN/ERROR go to the build console and JUL; DEBUG/FINE goes to JUL
+ * Build console for operators; Jenkins JUL is not spammed at INFO.
+ * WARN/ERROR go to the console and JUL; INFO is console-only (JUL FINE); DEBUG/FINE goes to JUL
  * and optionally to the console when {@code verboseLogging} is on.
  * <p>
  * Console contract:
@@ -34,7 +35,7 @@ import java.util.logging.Logger;
  *   <li>Never log secret values, tokens, or passwords</li>
  * </ul>
  */
-final class PortainerBuildLogger {
+final class PortainerBuildLogger implements AutoCloseable {
 
     static final String PREFIX = "Portainer:";
 
@@ -82,7 +83,8 @@ final class PortainerBuildLogger {
         printlnRaw(bannerHeader(title));
     }
 
-    void close() {
+    @Override
+    public void close() {
         if (!opened || closed) {
             return;
         }
@@ -442,7 +444,8 @@ final class PortainerBuildLogger {
 
     private void emit(Level level, String message, boolean toConsole) {
         boolean writeConsole = toConsole && listener != null;
-        boolean logJul = jul.isLoggable(level);
+        Level julLevel = level == Level.INFO ? Level.FINE : level;
+        boolean logJul = jul.isLoggable(julLevel);
         if (!logJul && !writeConsole) {
             return;
         }
@@ -450,7 +453,7 @@ final class PortainerBuildLogger {
         String[] lines = body.isEmpty() ? new String[] {""} : body.split("\\R", -1);
         String first = formatLine(level, lines[0]);
         if (logJul) {
-            jul.log(level, first);
+            jul.log(julLevel, first);
         }
         if (writeConsole) {
             PrintStream out = listener.getLogger();

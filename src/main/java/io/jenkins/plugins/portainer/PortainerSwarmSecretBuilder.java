@@ -8,7 +8,6 @@ import hudson.Launcher;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
-import hudson.model.Descriptor;
 import hudson.model.Item;
 import hudson.model.Run;
 import hudson.model.TaskListener;
@@ -17,13 +16,11 @@ import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
 import jenkins.tasks.SimpleBuildStep;
-import net.sf.json.JSONObject;
 import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
-import org.kohsuke.stapler.StaplerRequest2;
 import org.kohsuke.stapler.verb.POST;
 
 import java.io.IOException;
@@ -41,11 +38,6 @@ import java.util.logging.Logger;
  * ({@code @Symbol("portainerStackSecret")}; alias {@code portainerSwarmSecret}).
  */
 public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildStep {
-
-    /**
-     * When non-null, Vault HTTP is skipped and this map supplies key → value for the step.
-     */
-    static volatile Map<String, String> testVaultOverride;
 
     private static final Logger LOGGER = Logger.getLogger(PortainerSwarmSecretBuilder.class.getName());
 
@@ -236,12 +228,9 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
             @NonNull Run<?, ?> run,
             @NonNull EnvVars buildEnv,
             @NonNull TaskListener listener) throws InterruptedException, IOException {
-        PortainerBuildLogger log = new PortainerBuildLogger(LOGGER, listener, verboseLogging);
-        log.open(PortainerBuildLogger.TITLE_STACK_SECRET);
-        try {
+        try (PortainerBuildLogger log = new PortainerBuildLogger(LOGGER, listener, verboseLogging)) {
+            log.open(PortainerBuildLogger.TITLE_STACK_SECRET);
             performBody(run, buildEnv, log);
-        } finally {
-            log.close();
         }
     }
 
@@ -455,10 +444,6 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
             ResolvedConnection connection,
             VaultFields fields,
             PortainerBuildLogger log) throws AbortException {
-        Map<String, String> override = testVaultOverride;
-        if (override != null) {
-            return Map.copyOf(override);
-        }
         return VaultKv.resolve(new VaultKv.Request(
                 new VaultKv.Request.VaultSpec(
                         VaultKv.Policy.REQUIRED,
@@ -516,29 +501,6 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
         @Override
         public String getDisplayName() {
             return "Portainer Stack Secret";
-        }
-
-        @Override
-        public Builder newInstance(StaplerRequest2 req, JSONObject formData) throws Descriptor.FormException {
-            if (formData != null) {
-                ConnectionMode.flattenRadioBlock(
-                        formData,
-                        "portainerConnectionMode",
-                        "portainerUrl",
-                        "portainerCredentialsId");
-                ConnectionMode.flattenRadioBlock(
-                        formData,
-                        "vaultConnectionMode",
-                        ConnectionMode.INHERIT,
-                        ConnectionMode::normalize,
-                        "vaultUrl",
-                        "vaultAppRoleCredentialsId",
-                        "vaultPath",
-                        "vaultMount",
-                        "vaultNamespace",
-                        "vaultVersion");
-            }
-            return super.newInstance(req, formData);
         }
 
         public String getPortainerConnectionSummary() {

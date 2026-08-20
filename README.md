@@ -112,7 +112,7 @@ More examples:
 - Jenkins **2.541.3+** 
 - Portainer **2.39.3+**
 - JDK truststore must trust Portainer (and Vault, if used) TLS certificates — no skip-SSL
-- Optional: [HashiCorp Vault Plugin](https://plugins.jenkins.io/hashicorp-vault-plugin/) (tested with 384.vda_86ec66c537) — only for Vault **Inherit** on Stack / Secret
+- Optional: [HashiCorp Vault Plugin](https://plugins.jenkins.io/hashicorp-vault-plugin/) (tested with 383.v7529eea_ef531) — only for Vault **Inherit** on Stack / Secret
 
 Most steps run on the **controller** and do not need an agent workspace. Exceptions: **Stack Config** always clones on an agent (`git` on PATH); **Helm** needs a workspace only when Values source is **Repository**.
 

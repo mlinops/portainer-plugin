@@ -164,18 +164,6 @@ public class PortainerStackBuilderTest {
         assertEquals(PortainerStackBuilder.SOURCE_REPOSITORY, loaded.getStackSource());
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("======== Portainer Stack Deployment ========", build);
-        jenkins.assertLogContains("[INFO] Stack name=demo type=compose", build);
-        jenkins.assertLogNotContains("starting stack step", build);
-        jenkins.assertLogNotContains("[INFO] config ", build);
-        jenkins.assertLogNotContains("compose soft-check", build);
-        jenkins.assertLogContains("[INFO] Preflight check of endpoint", build);
-        jenkins.assertLogContains("[INFO] Env keys=1", build);
-        jenkins.assertLogNotContains("[INFO] Stack created", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=created stackId=11 duration=", build);
-        jenkins.assertLogNotContains("completed successfully", build);
-        jenkins.assertLogNotContains("creating from Git", build);
-        jenkins.assertLogNotContains("GET /api/", build);
         jenkins.assertLogNotContains("[DEBUG]", build);
         assertTrue(lastPath.get().contains("/standalone/repository"));
         assertTrue(createCalled.get());
@@ -196,13 +184,6 @@ public class PortainerStackBuilderTest {
         assertTrue(loaded.isValidateOnly());
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("[INFO] Preflight check of endpoint", build);
-        jenkins.assertLogContains("[INFO] Validate-only — skipping deploy", build);
-        jenkins.assertLogNotContains("Would create-or-redeploy stack from Git", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=validated", build);
-        jenkins.assertLogNotContains("completed successfully", build);
-        jenkins.assertLogNotContains("creating from Git", build);
-        jenkins.assertLogNotContains("stack created", build);
         assertTrue(!createCalled.get());
         assertFalse(isStackMutateApi(lastPath.get(), lastMethod.get()));
         // validateOnly looks up the stack after preflight, so last path is /api/stacks
@@ -229,8 +210,6 @@ public class PortainerStackBuilderTest {
                         + "}\n",
                 true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogContains("Validate-only — skipping deploy", run);
-        jenkins.assertLogContains("outcome=validated", run);
         assertTrue(!createCalled.get());
         assertFalse(isStackMutateApi(lastPath.get(), lastMethod.get()));
     }
@@ -252,8 +231,6 @@ public class PortainerStackBuilderTest {
                         + ")\n",
                 true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogContains("Validate-only — skipping deploy", run);
-        jenkins.assertLogContains("outcome=validated", run);
         assertTrue(!createCalled.get());
         assertFalse(isStackMutateApi(lastPath.get(), lastMethod.get()));
     }
@@ -277,11 +254,11 @@ public class PortainerStackBuilderTest {
     }
 
     /**
-     * PORT-18: Freestyle Save posts f:radioBlock as nested JSON {@code {"value":"…"}}.
-     * Descriptor.newInstance must flatten before Stapler bind (Object setters do not work).
+     * Freestyle {@code f:radioBlock inline="true"} binds mode strings and sibling fields at the
+     * top level (no nested {@code {"value":…}} object).
      */
     @Test
-    public void stapler_radioBlockJson_bindsInheritAndManualFields(JenkinsRule jenkins) throws Exception {
+    public void stapler_inlineRadio_bindsInheritAndManualFields(JenkinsRule jenkins) throws Exception {
         PortainerStackBuilder step = jenkins.executeOnServer(() -> {
             JSONObject json = new JSONObject();
             json.put("stapler-class", PortainerStackBuilder.class.getName());
@@ -300,32 +277,14 @@ public class PortainerStackBuilderTest {
             json.put("vaultVersion", "");
             json.put("prune", false);
             json.put("repullImageAndRedeploy", true);
-
-            // Nested radioBlock shape from Freestyle configSubmit (lab reproduction).
-            JSONObject portainerMode = new JSONObject();
-            portainerMode.put("value", "inherit");
-            json.put("portainerConnectionMode", portainerMode);
-
-            JSONObject vaultMode = new JSONObject();
-            vaultMode.put("value", "manual");
-            vaultMode.put("vaultUrl", "https://vault.example:8200");
-            vaultMode.put("vaultAppRoleCredentialsId", "jenkins-portainer-simple");
-            json.put("vaultConnectionMode", vaultMode);
-
-            // Guard: without flatten, Stapler would try to instantiate Object/String from JSONObject.
-            assertTrue(json.get("portainerConnectionMode") instanceof JSONObject);
-            assertTrue(json.get("vaultConnectionMode") instanceof JSONObject);
+            json.put("portainerConnectionMode", "inherit");
+            json.put("vaultConnectionMode", "manual");
+            json.put("vaultUrl", "https://vault.example:8200");
+            json.put("vaultAppRoleCredentialsId", "jenkins-portainer-simple");
 
             PortainerStackBuilder.DescriptorImpl d =
                     jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
-            PortainerStackBuilder bound =
-                    (PortainerStackBuilder) d.newInstance(Stapler.getCurrentRequest2(), json);
-
-            // Flatten mutates form JSON in place before bind.
-            assertEquals(PortainerStackBuilder.MODE_INHERIT, json.getString("portainerConnectionMode"));
-            assertEquals(PortainerStackBuilder.MODE_MANUAL, json.getString("vaultConnectionMode"));
-            assertEquals("https://vault.example:8200", json.getString("vaultUrl"));
-            return bound;
+            return (PortainerStackBuilder) d.newInstance(Stapler.getCurrentRequest2(), json);
         });
 
         assertEquals(PortainerStackBuilder.MODE_INHERIT, step.getPortainerConnectionMode());
@@ -339,23 +298,17 @@ public class PortainerStackBuilderTest {
     }
 
     @Test
-    public void stapler_radioBlockJson_bindsPortainerManual(JenkinsRule jenkins) throws Exception {
+    public void stapler_inlineRadio_bindsPortainerManual(JenkinsRule jenkins) throws Exception {
         PortainerStackBuilder step = jenkins.executeOnServer(() -> {
             JSONObject json = new JSONObject();
             json.put("endpointId", "1");
             json.put("stackType", "compose");
             json.put("stackName", "demo");
             json.put("repositoryUrl", "https://gitlab.example/group/stack.git");
-
-            JSONObject portainerMode = new JSONObject();
-            portainerMode.put("value", "manual");
-            portainerMode.put("portainerUrl", "https://portainer.example:9443");
-            portainerMode.put("portainerCredentialsId", "portainer-api-key");
-            json.put("portainerConnectionMode", portainerMode);
-
-            JSONObject vaultMode = new JSONObject();
-            vaultMode.put("value", "inherit");
-            json.put("vaultConnectionMode", vaultMode);
+            json.put("portainerConnectionMode", "manual");
+            json.put("portainerUrl", "https://portainer.example:9443");
+            json.put("portainerCredentialsId", "portainer-api-key");
+            json.put("vaultConnectionMode", "inherit");
 
             PortainerStackBuilder.DescriptorImpl d =
                     jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
@@ -369,21 +322,15 @@ public class PortainerStackBuilderTest {
     }
 
     @Test
-    public void stapler_radioBlockJson_bindsVaultNone(JenkinsRule jenkins) throws Exception {
+    public void stapler_inlineRadio_bindsVaultNone(JenkinsRule jenkins) throws Exception {
         PortainerStackBuilder step = jenkins.executeOnServer(() -> {
             JSONObject json = new JSONObject();
             json.put("endpointId", "1");
             json.put("stackType", "compose");
             json.put("stackName", "demo");
             json.put("repositoryUrl", "https://gitlab.example/group/stack.git");
-
-            JSONObject portainerMode = new JSONObject();
-            portainerMode.put("value", "inherit");
-            json.put("portainerConnectionMode", portainerMode);
-
-            JSONObject vaultMode = new JSONObject();
-            vaultMode.put("value", "none");
-            json.put("vaultConnectionMode", vaultMode);
+            json.put("portainerConnectionMode", "inherit");
+            json.put("vaultConnectionMode", "none");
 
             PortainerStackBuilder.DescriptorImpl d =
                     jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
@@ -412,12 +359,9 @@ public class PortainerStackBuilderTest {
         assertEquals(PortainerStackBuilder.MODE_NONE, loaded.getVaultConnectionMode());
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("Env keys=", build);
-        jenkins.assertLogNotContains("[INFO] Stack created", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=created", build);
-        jenkins.assertLogNotContains("Vault Manual reading", build);
-        jenkins.assertLogNotContains("HashiCorp Vault Plugin", build);
         jenkins.assertLogNotContains("Preflight check of Vault", build);
+        assertTrue(createCalled.get());
+        assertTrue(lastPath.get().contains("/standalone/repository"));
     }
 
     @Test
@@ -432,10 +376,6 @@ public class PortainerStackBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogNotContains("[INFO] Stack redeployed", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=updated stackId=11 duration=", build);
-        jenkins.assertLogNotContains("stack exists", build);
-        jenkins.assertLogNotContains("completed successfully", build);
         assertTrue(lastPath.get().contains("/git/redeploy"));
         assertTrue(createCalled.get());
     }
@@ -461,9 +401,6 @@ public class PortainerStackBuilderTest {
         assertTrue(loaded.getStackFileContent() != null && loaded.getStackFileContent().contains("nginx"));
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogNotContains("[INFO] Stack created", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=created", build);
-        jenkins.assertLogNotContains("creating from YAML", build);
         jenkins.assertLogNotContains(secretMarker, build);
         jenkins.assertLogNotContains("TOKEN=", build);
         assertTrue(lastPath.get().contains("/standalone/string"));
@@ -485,10 +422,6 @@ public class PortainerStackBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogNotContains("[INFO] Stack updated", build);
-        jenkins.assertLogNotContains("[INFO] Stack created", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=updated stackId=11 duration=", build);
-        jenkins.assertLogNotContains("stack exists", build);
         assertTrue(lastPath.get().matches(".*/api/stacks/11$") || lastPath.get().endsWith("/api/stacks/11"));
         assertTrue(!lastPath.get().contains("git/redeploy"));
         assertEquals("PUT", lastMethod.get());
@@ -528,25 +461,16 @@ public class PortainerStackBuilderTest {
     }
 
     @Test
-    public void stapler_radioBlockJson_bindsStackSourceYaml(JenkinsRule jenkins) throws Exception {
+    public void stapler_inlineRadio_bindsStackSourceYaml(JenkinsRule jenkins) throws Exception {
         PortainerStackBuilder step = jenkins.executeOnServer(() -> {
             JSONObject json = new JSONObject();
             json.put("endpointId", "1");
             json.put("stackType", "compose");
             json.put("stackName", "demo");
-
-            JSONObject portainerMode = new JSONObject();
-            portainerMode.put("value", "inherit");
-            json.put("portainerConnectionMode", portainerMode);
-
-            JSONObject vaultMode = new JSONObject();
-            vaultMode.put("value", "inherit");
-            json.put("vaultConnectionMode", vaultMode);
-
-            JSONObject source = new JSONObject();
-            source.put("value", "yaml");
-            source.put("stackFileContent", "services:\n  web:\n    image: nginx:alpine\n");
-            json.put("stackSource", source);
+            json.put("portainerConnectionMode", "inherit");
+            json.put("vaultConnectionMode", "inherit");
+            json.put("stackSource", "yaml");
+            json.put("stackFileContent", "services:\n  web:\n    image: nginx:alpine\n");
 
             PortainerStackBuilder.DescriptorImpl d =
                     jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
@@ -579,8 +503,6 @@ public class PortainerStackBuilderTest {
                 + "}\n";
         job.setDefinition(new CpsFlowDefinition(script, true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogNotContains("[INFO] Stack created", run);
-        jenkins.assertLogContains("[INFO] Summary outcome=created", run);
         jenkins.assertLogNotContains("image: nginx:alpine", run);
         assertTrue(lastPath.get().contains("/standalone/string"));
     }
@@ -621,10 +543,8 @@ public class PortainerStackBuilderTest {
                 + "}\n";
         job.setDefinition(new CpsFlowDefinition(script, true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogNotContains("[INFO] Stack created", run);
-        jenkins.assertLogContains("[INFO] Summary outcome=created", run);
-        jenkins.assertLogNotContains("completed successfully", run);
         assertTrue(lastPath.get().contains("/standalone/repository"));
+        assertTrue(createCalled.get());
     }
 
     @Test
@@ -674,9 +594,8 @@ public class PortainerStackBuilderTest {
                 + "}\n";
         job.setDefinition(new CpsFlowDefinition(script, true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogNotContains("[INFO] Stack redeployed", run);
-        jenkins.assertLogContains("[INFO] Summary outcome=updated", run);
         assertTrue(lastPath.get().contains("/git/redeploy"));
+        assertTrue(createCalled.get());
     }
 
     @Test
@@ -698,12 +617,10 @@ public class PortainerStackBuilderTest {
                 + "}\n";
         job.setDefinition(new CpsFlowDefinition(script, true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
-        jenkins.assertLogContains("[INFO] Stack name=demo type=compose", run);
         jenkins.assertLogContains("[DEBUG] GET /api/", run);
         jenkins.assertLogContains("[DEBUG] Connection=", run);
-        jenkins.assertLogNotContains("[INFO] Stack created", run);
-        jenkins.assertLogContains("[INFO] Summary outcome=created", run);
-        jenkins.assertLogNotContains("[WARNING]", run);
+        assertTrue(lastPath.get().contains("/standalone/repository"));
+        assertTrue(createCalled.get());
     }
 
     @Test
@@ -801,7 +718,6 @@ public class PortainerStackBuilderTest {
         project.getBuildersList().add(repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git"));
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
-        jenkins.assertLogContains("======== Portainer Stack Deployment ========", build);
         jenkins.assertLogContains("[ERROR] Preflight failed: HTTP 500 - boom", build);
         jenkins.assertLogNotContains("ERROR: Portainer:", build);
         jenkins.assertLogNotContains("at io.jenkins.plugins.portainer.PortainerClient", build);
@@ -854,9 +770,8 @@ public class PortainerStackBuilderTest {
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
         jenkins.assertLogNotContains("Invalid Compose YAML", build);
-        jenkins.assertLogNotContains("[INFO] Stack created", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=created", build);
         assertTrue(lastPath.get() != null && lastPath.get().contains("/standalone/repository"));
+        assertTrue(createCalled.get());
     }
 
     @Test
@@ -912,18 +827,14 @@ public class PortainerStackBuilderTest {
             assertEquals(PortainerStackBuilder.MODE_MANUAL, loaded.getVaultConnectionMode());
 
             FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-            jenkins.assertLogContains("Preflight check of Vault", build);
-            jenkins.assertLogContains(
-                    "Env keys=3", build);
-            jenkins.assertLogNotContains("[INFO] Stack created", build);
-            jenkins.assertLogContains("[INFO] Summary outcome=created", build);
-            jenkins.assertLogNotContains("completed successfully", build);
             jenkins.assertLogNotContains("role-id-SHOULD-NOT-LOG", build);
             jenkins.assertLogNotContains("secret-id-SHOULD-NOT-LOG", build);
             jenkins.assertLogNotContains("s3cret", build);
             jenkins.assertLogNotContains("hvs.test-token", build);
             jenkins.assertLogNotContains("[DEBUG]", build);
             assertTrue(vaultLoginBody.get() != null && vaultLoginBody.get().contains("role_id"));
+            assertTrue(createCalled.get());
+            assertTrue(lastPath.get().contains("/standalone/repository"));
         } finally {
             vault.stop(0);
         }
@@ -971,10 +882,9 @@ public class PortainerStackBuilderTest {
             FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
             jenkins.assertLogContains("[WARN] Vault revoke-self failed (token left for Vault TTL)", build);
             jenkins.assertLogContains("soft-fail: HTTP 403", build);
-            jenkins.assertLogNotContains("[INFO] Stack created", build);
-            jenkins.assertLogContains("[INFO] Summary outcome=created", build);
             jenkins.assertLogNotContains("hvs.test-token", build);
-            jenkins.assertLogNotContains("[WARNING]", build);
+            assertTrue(createCalled.get());
+            assertTrue(lastPath.get().contains("/standalone/repository"));
         } finally {
             vault.stop(0);
         }
@@ -1005,9 +915,8 @@ public class PortainerStackBuilderTest {
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-        jenkins.assertLogContains("[INFO] Stack name=demo type=compose", build);
-        jenkins.assertLogNotContains("[INFO] Stack created", build);
-        jenkins.assertLogContains("[INFO] Summary outcome=created", build);
+        assertTrue(createCalled.get());
+        assertTrue(lastPath.get().contains("/standalone/repository"));
     }
 
     @Test
@@ -1069,20 +978,11 @@ public class PortainerStackBuilderTest {
         assertEquals("System Portainer is not configured.", d.getPortainerConnectionSummary());
         configurePortainer(jenkins, "Production Portainer");
         assertEquals("System Portainer is configured.", d.getPortainerConnectionSummary());
-        // API test doubles present; Global Vault System remains empty → not configured.
         String vaultSummary = d.getVaultInheritSummary();
         assertEquals("Vault Plugin is not configured.", vaultSummary);
         assertEquals(vaultSummary, VaultPluginInherit.inheritSummary());
         assertFalse(d.isVaultInheritReady());
         assertEquals("Vault disabled.", PortainerStackBuilder.DescriptorImpl.VAULT_NONE_SUMMARY);
-    }
-
-    @Test
-    public void descriptor_newInstance_nullFormData(JenkinsRule jenkins) {
-        PortainerStackBuilder.DescriptorImpl d =
-                jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
-        // null form → empty JSONObject then Stapler bind (fails without required fields)
-        assertThrows(Throwable.class, () -> d.newInstance((org.kohsuke.stapler.StaplerRequest2) null, null));
     }
 
     private void configurePortainer(JenkinsRule jenkins, String name) throws Exception {

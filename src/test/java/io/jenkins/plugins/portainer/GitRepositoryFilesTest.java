@@ -16,8 +16,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -35,9 +33,7 @@ public class GitRepositoryFilesTest {
     Path tempDir;
 
     @AfterEach
-    public void clearOverrides() {
-        GitRepositoryFiles.testOverride.set(null);
-        GitRepositoryFiles.listTestOverride.set(null);
+    public void clearLoopback() {
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
     }
 
@@ -277,22 +273,6 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void listConfigFiles_defaultReferencePassedToOverride() throws Exception {
-        AtomicReference<String> seenRef = new AtomicReference<>();
-        GitRepositoryFiles.listTestOverride.set(req -> {
-            seenRef.set(req.reference);
-            return List.of();
-        });
-        GitRepositoryFiles.listConfigFiles(
-                "http://127.0.0.1/configs.git",
-                "  ",
-                "configs",
-                "**/*",
-                cloneCtx(null, null, null, null));
-        assertEquals(PortainerStackBuilder.DEFAULT_REPOSITORY_REFERENCE, seenRef.get());
-    }
-
-    @Test
     public void cloneCommandLine_usesRepoUrlWithoutUserinfo() {
         String repo = "https://gitlab.example/group/values.git";
         String password = "s3cret:token";
@@ -393,8 +373,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void readFile_rejectsBlockedHost_withoutOverride() {
-        GitRepositoryFiles.testOverride.set(null);
+    public void readFile_rejectsBlockedHost() {
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.readFile(
@@ -407,8 +386,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void readFile_rejectsUnresolvableHost_withoutOverride() {
-        GitRepositoryFiles.testOverride.set(null);
+    public void readFile_rejectsUnresolvableHost() {
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.readFile(
@@ -421,25 +399,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void readFile_testOverride_bypassesHostCheck() throws Exception {
-        AtomicBoolean called = new AtomicBoolean(false);
-        GitRepositoryFiles.testOverride.set(req -> {
-            called.set(true);
-            assertEquals("http://169.254.169.254/repo.git", req.repositoryUrl);
-            return "values: {}\n";
-        });
-        String content = GitRepositoryFiles.readFile(
-                "http://169.254.169.254/repo.git",
-                "main",
-                "values.yaml",
-                cloneCtx(null, null, null, null));
-        assertEquals("values: {}\n", content);
-        assertTrue(called.get());
-    }
-
-    @Test
-    public void listConfigFiles_rejectsBlockedHost_withoutOverride() {
-        GitRepositoryFiles.listTestOverride.set(null);
+    public void listConfigFiles_rejectsBlockedHost() {
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.listConfigFiles(
@@ -453,8 +413,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void listConfigFiles_rejectsUnresolvableHost_withoutOverride() {
-        GitRepositoryFiles.listTestOverride.set(null);
+    public void listConfigFiles_rejectsUnresolvableHost() {
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.listConfigFiles(
@@ -465,25 +424,6 @@ public class GitRepositoryFilesTest {
                         cloneCtx(null, null, null, null)));
         String msg = ex.getMessage().toLowerCase();
         assertTrue(msg.contains("resolv") || msg.contains("not allowed"), msg);
-    }
-
-    @Test
-    public void listConfigFiles_listTestOverride_bypassesHostCheck() throws Exception {
-        AtomicBoolean called = new AtomicBoolean(false);
-        GitRepositoryFiles.listTestOverride.set(req -> {
-            called.set(true);
-            assertEquals("http://169.254.169.254/configs.git", req.repositoryUrl);
-            return List.of(new SwarmConfigFile("app.json", "{}".getBytes()));
-        });
-        List<SwarmConfigFile> files = GitRepositoryFiles.listConfigFiles(
-                "http://169.254.169.254/configs.git",
-                "main",
-                "configs",
-                "**/*",
-                cloneCtx(null, null, null, null));
-        assertEquals(1, files.size());
-        assertEquals("app.json", files.get(0).relativePath);
-        assertTrue(called.get());
     }
 
     @Test
