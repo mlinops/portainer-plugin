@@ -64,6 +64,9 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
     private boolean validateOnly;
     private boolean pruneOld;
 
+    /** Null uses {@link GitRepositoryFiles#listConfigFiles}. */
+    transient GitRepositoryFiles.Lister gitLister;
+
     @DataBoundConstructor
     public PortainerSwarmConfigBuilder(String endpointId) {
         this.endpointId = endpointId == null ? "" : endpointId.trim();
@@ -331,11 +334,13 @@ public class PortainerSwarmConfigBuilder extends Builder implements SimpleBuildS
         }
     }
 
-    private static List<SwarmConfigFile> listConfigFilesFromGit(
+    private List<SwarmConfigFile> listConfigFilesFromGit(
             GitConfigListRequest req, PortainerBuildLogger log) throws InterruptedException, IOException {
         List<SwarmConfigFile> files;
         try {
-            files = GitRepositoryFiles.listConfigFiles(
+            GitRepositoryFiles.Lister lister =
+                    gitLister != null ? gitLister : GitRepositoryFiles::listConfigFiles;
+            files = lister.listConfigFiles(
                     req.repoUrl, req.gitRef, req.configDir, req.glob, req.cloneCtx);
         } catch (IOException e) {
             String msg = PortainerConnections.truncateMessage(e);

@@ -18,7 +18,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
-import org.mockito.MockedStatic;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -33,11 +32,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.nullable;
-import static org.mockito.Mockito.CALLS_REAL_METHODS;
-import static org.mockito.Mockito.mockStatic;
 
 @WithJenkins
 public class PortainerHelmBuilderTest {
@@ -207,25 +201,21 @@ public class PortainerHelmBuilderTest {
     @Test
     public void freestyle_repository_fetchesThenSendsValues(JenkinsRule jenkins) throws Exception {
         configurePortainer(jenkins);
-        try (MockedStatic<GitRepositoryFiles> git = mockStatic(GitRepositoryFiles.class, CALLS_REAL_METHODS)) {
-            git.when(() -> GitRepositoryFiles.readFile(
-                            anyString(), nullable(String.class), anyString(), any()))
-                    .thenReturn("replicaCount: 2\n");
-            FreeStyleProject project = jenkins.createFreeStyleProject();
-            PortainerHelmBuilder step = new PortainerHelmBuilder(
-                    "1", "nginx", "nginx", "https://charts.example/bitnami");
-            step.setNamespace("default");
-            step.setValuesSource(PortainerHelmBuilder.VALUES_REPOSITORY);
-            step.setValuesRepositoryUrl("https://gitlab.example/group/values.git");
-            step.setValuesFilePath("values.yaml");
-            step.setValuesRepositoryReferenceName("refs/heads/main");
-            project.getBuildersList().add(step);
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        PortainerHelmBuilder step = new PortainerHelmBuilder(
+                "1", "nginx", "nginx", "https://charts.example/bitnami");
+        step.setNamespace("default");
+        step.setValuesSource(PortainerHelmBuilder.VALUES_REPOSITORY);
+        step.setValuesRepositoryUrl("https://gitlab.example/group/helm-values.git");
+        step.setValuesFilePath("values.yaml");
+        step.setValuesRepositoryReferenceName("refs/heads/main");
+        step.gitReader = (url, ref, path, ctx) -> "replicaCount: 2\n";
+        project.getBuildersList().add(step);
 
-            FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
-            jenkins.assertLogNotContains("replicaCount", build);
-            assertTrue(installCalled.get());
-            assertTrue(lastInstallBody.get().contains("replicaCount: 2"));
-        }
+        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.assertLogNotContains("replicaCount", build);
+        assertTrue(installCalled.get());
+        assertTrue(lastInstallBody.get().contains("replicaCount: 2"));
     }
 
     @Test

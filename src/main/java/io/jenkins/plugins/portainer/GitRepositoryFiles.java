@@ -54,6 +54,23 @@ final class GitRepositoryFiles {
         }
     }
 
+    @FunctionalInterface
+    interface Reader {
+        String readFile(String repositoryUrl, String reference, String relativePath, CloneContext ctx)
+                throws IOException, InterruptedException;
+    }
+
+    @FunctionalInterface
+    interface Lister {
+        List<SwarmConfigFile> listConfigFiles(
+                String repositoryUrl,
+                String reference,
+                String configPath,
+                String fileGlob,
+                CloneContext ctx)
+                throws IOException, InterruptedException;
+    }
+
     /**
      * Shallow-clone {@code repositoryUrl} at {@code reference} into a workspace temp dir and read
      * {@code relativePath}.

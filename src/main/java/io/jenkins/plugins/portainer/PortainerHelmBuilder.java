@@ -78,6 +78,10 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
     private boolean verboseLogging;
     /** When true, preflight + field checks only — no list/install/uninstall / ensure-NS. */
     private boolean validateOnly;
+
+    /** Null uses {@link GitRepositoryFiles#readFile}. */
+    transient GitRepositoryFiles.Reader gitReader;
+
     /**
      * When true, ensure the target Kubernetes namespace exists via Portainer before install
      * ({@code GET/POST /api/kubernetes/{id}/namespaces…}). Default true; skipped when {@code validateOnly}.
@@ -566,7 +570,8 @@ public class PortainerHelmBuilder extends Builder implements SimpleBuildStep {
         String gitRef = resolveValuesGitRef(request.buildEnv, request.precomputed);
         PortainerCredentials.GitAuth gitAuth =
                 PortainerConnections.resolveOptionalGitAuth(valuesGitCredentialsId, request.item);
-        String content = GitRepositoryFiles.readFile(
+        GitRepositoryFiles.Reader reader = gitReader != null ? gitReader : GitRepositoryFiles::readFile;
+        String content = reader.readFile(
                 repoUrl,
                 gitRef,
                 path,
