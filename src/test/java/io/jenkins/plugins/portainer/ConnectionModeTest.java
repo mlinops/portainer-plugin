@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -64,12 +65,11 @@ public class ConnectionModeTest {
         assertEquals(PortainerStackBuilder.MODE_INHERIT, step.getPortainerConnectionMode());
         assertEquals("https://portainer.example:9443", step.getPortainerUrl());
 
-        step.setVaultConnectionMode(PortainerStackBuilder.MODE_MANUAL);
-        step.setVaultUrl("https://vault.example:8200");
-        step.setVaultAppRoleCredentialsId("vault-approle");
-        assertEquals(PortainerStackBuilder.MODE_MANUAL, step.getVaultConnectionMode());
-        assertEquals("https://vault.example:8200", step.getVaultUrl());
-        assertEquals("vault-approle", step.getVaultAppRoleCredentialsId());
+        VaultManual vault = new VaultManual("https://vault.example:8200", "vault-approle");
+        step.setVault(vault);
+        assertInstanceOf(VaultManual.class, step.getVault());
+        assertEquals("https://vault.example:8200", step.getVault().getVaultUrl());
+        assertEquals("vault-approle", step.getVault().getVaultAppRoleCredentialsId());
     }
 
     @Test
@@ -82,65 +82,28 @@ public class ConnectionModeTest {
     @Test
     public void vaultDefaultsToNone_whenEmpty() {
         PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        assertEquals(PortainerStackBuilder.MODE_NONE, step.getVaultConnectionMode());
-        assertTrue(ConnectionMode.isNone(step.getVaultConnectionMode()));
+        assertInstanceOf(VaultNone.class, step.getVault());
+        assertTrue(step.getVault().isNone());
     }
 
     @Test
-    public void vaultMigratesPathOnly_toInherit() {
+    public void resolveVaultOverlay_none_isEmpty() throws Exception {
         PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultPath("myapp/prod");
-        assertEquals(PortainerStackBuilder.MODE_INHERIT, step.getVaultConnectionMode());
-    }
-
-    @Test
-    public void vaultMigratesLegacyManualFields_toManual() {
-        PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultUrl("https://vault.example:8200");
-        step.setVaultAppRoleCredentialsId("vault-approle");
-        step.setVaultPath("myapp/prod");
-        assertEquals(PortainerStackBuilder.MODE_MANUAL, step.getVaultConnectionMode());
-    }
-
-    @Test
-    public void vaultExplicitNone_disablesOverlay() {
-        PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultConnectionMode(PortainerStackBuilder.MODE_NONE);
-        step.setVaultPath("myapp/prod");
-        step.setVaultUrl("https://vault.example:8200");
-        step.setVaultAppRoleCredentialsId("vault-approle");
-        assertEquals(PortainerStackBuilder.MODE_NONE, step.getVaultConnectionMode());
-        assertTrue(ConnectionMode.isNone(step.getVaultConnectionMode()));
-        assertEquals("off", step.vaultModeLabelForLog(null));
-    }
-
-    @Test
-    public void vaultExplicitInherit_overridesMigrationHint() {
-        PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultUrl("https://vault.example:8200");
-        step.setVaultConnectionMode(PortainerStackBuilder.MODE_INHERIT);
-        assertEquals(PortainerStackBuilder.MODE_INHERIT, step.getVaultConnectionMode());
-    }
-
-    @Test
-    public void resolveVaultOverlay_none_ignoresPathAndManualFields() throws Exception {
-        PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultConnectionMode(PortainerStackBuilder.MODE_NONE);
-        step.setVaultPath("myapp/prod");
-        step.setVaultUrl("https://vault.example:8200");
-        step.setVaultAppRoleCredentialsId("vault-approle");
+        step.setVault(new VaultNone());
         PortainerBuildLogger log = new PortainerBuildLogger(
                 java.util.logging.Logger.getLogger("test"), TaskListener.NULL, false);
         assertTrue(step.resolveVaultOverlay(null, new hudson.EnvVars(), null, null, null, log).isEmpty());
+        assertEquals("off", step.vaultModeLabelForLog(null));
     }
 
     @Test
     public void resolveVaultOverlay_inheritEmptyPath_softSkips() throws Exception {
         PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultConnectionMode(PortainerStackBuilder.MODE_INHERIT);
+        step.setVault(new VaultInherit());
         PortainerBuildLogger log = new PortainerBuildLogger(
                 java.util.logging.Logger.getLogger("test"), TaskListener.NULL, false);
         assertTrue(step.resolveVaultOverlay(null, new hudson.EnvVars(), null, null, null, log).isEmpty());
+        assertEquals("off", step.vaultModeLabelForLog(null));
     }
 
     @Test

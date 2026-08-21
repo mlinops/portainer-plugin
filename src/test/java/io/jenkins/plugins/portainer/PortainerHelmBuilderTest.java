@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @WithJenkins
-public class PortainerHelmBuilderTest {
+class PortainerHelmBuilderTest {
 
     private HttpServer server;
     private String base;
@@ -52,7 +52,7 @@ public class PortainerHelmBuilderTest {
     private final List<String> helmMutationOrder = new ArrayList<>();
 
     @BeforeEach
-    public void startServer() throws IOException {
+    void startServer() throws IOException {
         System.setProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP, "true");
         releaseExists.set(false);
         endpointType.set(5);
@@ -139,7 +139,7 @@ public class PortainerHelmBuilderTest {
     }
 
     @AfterEach
-    public void stopServer() {
+    void stopServer() {
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
         if (server != null) {
             server.stop(0);
@@ -147,14 +147,14 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void ensureNamespace_defaultsTrue() {
+    void ensureNamespace_defaultsTrue() {
         assertTrue(new PortainerHelmBuilder(
                         "1", "nginx", "nginx", "https://charts.example/bitnami")
                 .isEnsureNamespace());
     }
 
     @Test
-    public void valuesSource_defaultsNone_andMigratesBareValues() {
+    void valuesSource_defaultsNone_andMigratesBareValues() {
         PortainerHelmBuilder bare = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
         assertEquals(PortainerHelmBuilder.VALUES_NONE, bare.getValuesSource());
@@ -165,8 +165,8 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void freestyle_noValuesSource_omitsValuesInBody(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_noValuesSource_omitsValuesInBody(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
@@ -174,15 +174,15 @@ public class PortainerHelmBuilderTest {
         step.setValuesSource(PortainerHelmBuilder.VALUES_NONE);
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(installCalled.get());
         String body = lastInstallBody.get();
         assertTrue(body != null && !body.contains("\"values\""));
     }
 
     @Test
-    public void freestyle_manualYaml_sendsValues(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_manualYaml_sendsValues(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
@@ -199,8 +199,8 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void freestyle_repository_fetchesThenSendsValues(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_repository_fetchesThenSendsValues(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
@@ -219,8 +219,8 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void freestyle_installsWhenMissing(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_installsWhenMissing(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
@@ -236,47 +236,51 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void pipeline_valuesSourceNone_andYaml(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void pipeline_valuesSourceNone_andYaml(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         WorkflowJob noneJob = jenkins.createProject(WorkflowJob.class, "helm-values-none");
         noneJob.setDefinition(new CpsFlowDefinition(
-                "node {\n"
-                        + "  portainerHelm(\n"
-                        + "    endpointId: '1',\n"
-                        + "    releaseName: 'nginx',\n"
-                        + "    chart: 'nginx',\n"
-                        + "    repo: 'https://charts.example/bitnami',\n"
-                        + "    namespace: 'default',\n"
-                        + "    valuesSource: 'none'\n"
-                        + "  )\n"
-                        + "}\n",
+                """
+                node {
+                  portainerHelm(
+                    endpointId: '1',
+                    releaseName: 'nginx',
+                    chart: 'nginx',
+                    repo: 'https://charts.example/bitnami',
+                    namespace: 'default',
+                    valuesSource: 'none'
+                  )
+                }
+                """,
                 true));
-        WorkflowRun noneRun = jenkins.buildAndAssertSuccess(noneJob);
+        jenkins.buildAndAssertSuccess(noneJob);
         assertTrue(lastInstallBody.get() != null && !lastInstallBody.get().contains("\"values\""));
 
         installCalled.set(false);
         lastInstallBody.set(null);
         WorkflowJob yamlJob = jenkins.createProject(WorkflowJob.class, "helm-values-yaml");
         yamlJob.setDefinition(new CpsFlowDefinition(
-                "node {\n"
-                        + "  portainerHelm(\n"
-                        + "    endpointId: '1',\n"
-                        + "    releaseName: 'nginx',\n"
-                        + "    chart: 'nginx',\n"
-                        + "    repo: 'https://charts.example/bitnami',\n"
-                        + "    namespace: 'default',\n"
-                        + "    valuesSource: 'yaml',\n"
-                        + "    values: 'replicaCount: 3\\n'\n"
-                        + "  )\n"
-                        + "}\n",
+                """
+                node {
+                  portainerHelm(
+                    endpointId: '1',
+                    releaseName: 'nginx',
+                    chart: 'nginx',
+                    repo: 'https://charts.example/bitnami',
+                    namespace: 'default',
+                    valuesSource: 'yaml',
+                    values: 'replicaCount: 3\\n'
+                  )
+                }
+                """,
                 true));
-        WorkflowRun yamlRun = jenkins.buildAndAssertSuccess(yamlJob);
+        jenkins.buildAndAssertSuccess(yamlJob);
         assertTrue(lastInstallBody.get().contains("replicaCount: 3"));
     }
 
     @Test
-    public void freestyle_validateOnly_skipsMutatingApis(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_validateOnly_skipsMutatingApis(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
@@ -285,7 +289,7 @@ public class PortainerHelmBuilderTest {
         step.setValidateOnly(true);
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(!installCalled.get());
         assertTrue(!uninstallCalled.get());
         assertTrue(!helmListCalled.get());
@@ -296,8 +300,8 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void freestyle_ensureNamespace_createsMissingThenInstalls(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_ensureNamespace_createsMissingThenInstalls(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         namespaceExists.set(false);
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
@@ -306,16 +310,16 @@ public class PortainerHelmBuilderTest {
         step.setEnsureNamespace(true);
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(namespaceGetCalled.get());
         assertTrue(namespaceCreateCalled.get());
         assertTrue(installCalled.get());
     }
 
     @Test
-    public void freestyle_validateOnly_withEnsureNamespace_skipsEnsureHttp(JenkinsRule jenkins)
+    void freestyle_validateOnly_withEnsureNamespace_skipsEnsureHttp(JenkinsRule jenkins)
             throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
@@ -324,7 +328,7 @@ public class PortainerHelmBuilderTest {
         step.setValidateOnly(true);
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(!namespaceGetCalled.get());
         assertTrue(!namespaceCreateCalled.get());
         assertTrue(!installCalled.get());
@@ -332,8 +336,8 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void freestyle_ensureNamespaceFalse_skipsNamespaceHttp(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_ensureNamespaceFalse_skipsNamespaceHttp(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
@@ -341,7 +345,7 @@ public class PortainerHelmBuilderTest {
         step.setEnsureNamespace(false);
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(!namespaceGetCalled.get());
         assertTrue(!namespaceCreateCalled.get());
         assertTrue(installCalled.get());
@@ -349,22 +353,24 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void pipeline_validateOnly_skipsMutatingApis(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void pipeline_validateOnly_skipsMutatingApis(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "helm-validate-only");
         job.setDefinition(new CpsFlowDefinition(
-                "node {\n"
-                        + "  portainerHelm(\n"
-                        + "    endpointId: '1',\n"
-                        + "    releaseName: 'nginx',\n"
-                        + "    chart: 'nginx',\n"
-                        + "    repo: 'https://charts.example/bitnami',\n"
-                        + "    namespace: 'default',\n"
-                        + "    validateOnly: true\n"
-                        + "  )\n"
-                        + "}\n",
+                """
+                node {
+                  portainerHelm(
+                    endpointId: '1',
+                    releaseName: 'nginx',
+                    chart: 'nginx',
+                    repo: 'https://charts.example/bitnami',
+                    namespace: 'default',
+                    validateOnly: true
+                  )
+                }
+                """,
                 true));
-        WorkflowRun run = jenkins.buildAndAssertSuccess(job);
+        jenkins.buildAndAssertSuccess(job);
         assertTrue(!installCalled.get());
         assertTrue(!helmListCalled.get());
         assertTrue(!uninstallCalled.get());
@@ -374,23 +380,25 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void pipeline_withoutNode_validateOnly_noneValues(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void pipeline_withoutNode_validateOnly_noneValues(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
                 "1", "nginx", "nginx", "https://charts.example/bitnami");
         assertFalse(step.requiresWorkspace());
 
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "helm-no-node");
         job.setDefinition(new CpsFlowDefinition(
-                "portainerHelm(\n"
-                        + "  endpointId: '1',\n"
-                        + "  releaseName: 'nginx',\n"
-                        + "  chart: 'nginx',\n"
-                        + "  repo: 'https://charts.example/bitnami',\n"
-                        + "  namespace: 'default',\n"
-                        + "  valuesSource: 'none',\n"
-                        + "  validateOnly: true\n"
-                        + ")\n",
+                """
+                portainerHelm(
+                  endpointId: '1',
+                  releaseName: 'nginx',
+                  chart: 'nginx',
+                  repo: 'https://charts.example/bitnami',
+                  namespace: 'default',
+                  valuesSource: 'none',
+                  validateOnly: true
+                )
+                """,
                 true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
         jenkins.assertLogNotContains("no workspace", run);
@@ -400,30 +408,32 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void pipeline_upgradesWhenExists_withoutDelete(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void pipeline_upgradesWhenExists_withoutDelete(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         releaseExists.set(true);
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "helm-pipe");
         job.setDefinition(new CpsFlowDefinition(
-                "node {\n"
-                        + "  portainerHelm(\n"
-                        + "    endpointId: '1',\n"
-                        + "    releaseName: 'nginx',\n"
-                        + "    chart: 'nginx',\n"
-                        + "    repo: 'https://charts.example/bitnami',\n"
-                        + "    namespace: 'default'\n"
-                        + "  )\n"
-                        + "}\n",
+                """
+                node {
+                  portainerHelm(
+                    endpointId: '1',
+                    releaseName: 'nginx',
+                    chart: 'nginx',
+                    repo: 'https://charts.example/bitnami',
+                    namespace: 'default'
+                  )
+                }
+                """,
                 true));
-        WorkflowRun run = jenkins.buildAndAssertSuccess(job);
+        jenkins.buildAndAssertSuccess(job);
         assertTrue(!uninstallCalled.get());
         assertTrue(installCalled.get());
         assertTrue(helmListCalled.get());
     }
 
     @Test
-    public void freestyle_forceReinstall_deletesThenPosts(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_forceReinstall_deletesThenPosts(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         releaseExists.set(true);
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
@@ -432,7 +442,7 @@ public class PortainerHelmBuilderTest {
         step.setForceReinstall(true);
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(uninstallCalled.get());
         assertTrue(installCalled.get());
         assertTrue(helmListCalled.get());
@@ -440,8 +450,8 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void freestyle_rejectsDockerEndpoint(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_rejectsDockerEndpoint(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         endpointType.set(2);
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerHelmBuilder step = new PortainerHelmBuilder(
@@ -453,8 +463,8 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void freestyle_listHelm500_showsDetailsHintAndStackTrace(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_listHelm500_showsDetailsHintAndStackTrace(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         server.stop(0);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
@@ -512,8 +522,8 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void freestyle_k8sPreflightFailure_showsHint(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+    void freestyle_k8sPreflightFailure_showsHint(JenkinsRule jenkins) throws Exception {
+        configurePortainer();
         server.stop(0);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
@@ -559,7 +569,7 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void descriptor_displayName(JenkinsRule jenkins) {
+    void descriptor_displayName(JenkinsRule jenkins) {
         assertEquals(
                 "Portainer Helm Deployment",
                 jenkins.jenkins.getDescriptorByType(PortainerHelmBuilder.DescriptorImpl.class)
@@ -576,7 +586,7 @@ public class PortainerHelmBuilderTest {
     }
 
     @Test
-    public void formValidation_valuesPathAndRepo(JenkinsRule jenkins) throws Exception {
+    void formValidation_valuesPathAndRepo(JenkinsRule jenkins) throws Exception {
         PortainerHelmBuilder.DescriptorImpl d =
                 jenkins.getInstance().getDescriptorByType(PortainerHelmBuilder.DescriptorImpl.class);
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -597,7 +607,7 @@ public class PortainerHelmBuilderTest {
         assertEquals(FormValidation.Kind.OK, d.doCheckValues("", "none", project).kind);
     }
 
-    private void configurePortainer(JenkinsRule jenkins) throws Exception {
+    private void configurePortainer() {
         SystemCredentialsProvider.getInstance()
                 .getCredentials()
                 .add(new StringCredentialsImpl(

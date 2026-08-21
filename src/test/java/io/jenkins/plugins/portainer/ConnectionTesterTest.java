@@ -10,34 +10,33 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
-public class ConnectionTesterTest {
+class ConnectionTesterTest {
 
     @BeforeEach
-    public void clearLoopbackAllow() {
+    void clearLoopbackAllow() {
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
     }
 
     @AfterEach
-    public void restoreLoopbackAllow() {
+    void restoreLoopbackAllow() {
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
     }
 
     @Test
-    public void extractHost_supportsUnderscoreHostname() {
+    void extractHost_supportsUnderscoreHostname() {
         assertEquals("port_ainer.example",
                 ConnectionTester.extractHost("https://port_ainer.example:9443"));
     }
 
     @Test
-    public void extractHost_supportsIpv6Brackets() {
+    void extractHost_supportsIpv6Brackets() {
         assertEquals("2001:db8::1",
                 ConnectionTester.extractHost("https://[2001:db8::1]:9443/"));
     }
 
     @Test
-    public void extractHost_rejectsNullAndBlank() {
+    void extractHost_rejectsNullAndBlank() {
         IllegalArgumentException nullEx = assertThrows(
                 IllegalArgumentException.class, () -> ConnectionTester.extractHost(null));
         assertTrue(nullEx.getMessage().toLowerCase().contains("missing"));
@@ -48,28 +47,28 @@ public class ConnectionTesterTest {
     }
 
     @Test
-    public void extractHost_manualAuthority_stripsUserInfo() {
+    void extractHost_manualAuthority_stripsUserInfo() {
         // Underscore host → URI.getHost() is null → manual authority + userinfo strip.
         assertEquals("my_host.example",
                 ConnectionTester.extractHost("https://user:pass@my_host.example/api"));
     }
 
     @Test
-    public void extractHost_rejectsMissingScheme() {
+    void extractHost_rejectsMissingScheme() {
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class, () -> ConnectionTester.extractHost("portainer.example"));
         assertTrue(ex.getMessage().toLowerCase().contains("invalid"));
     }
 
     @Test
-    public void extractHost_rejectsIpv6AuthorityMissingClosingBracket() {
+    void extractHost_rejectsIpv6AuthorityMissingClosingBracket() {
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class, () -> ConnectionTester.extractHost("https://[::1"));
         assertTrue(ex.getMessage().toLowerCase().contains("invalid"));
     }
 
     @Test
-    public void extractHost_rejectsBlankHostAfterParse() {
+    void extractHost_rejectsBlankHostAfterParse() {
         IllegalArgumentException emptyAuthority = assertThrows(
                 IllegalArgumentException.class, () -> ConnectionTester.extractHost("https://"));
         assertTrue(emptyAuthority.getMessage().toLowerCase().contains("missing"));
@@ -80,7 +79,7 @@ public class ConnectionTesterTest {
     }
 
     @Test
-    public void extractHost_rejectsWhitespaceAndBackslashInHost() {
+    void extractHost_rejectsWhitespaceAndBackslashInHost() {
         IllegalArgumentException space = assertThrows(
                 IllegalArgumentException.class,
                 () -> ConnectionTester.extractHost("https://bad host.example"));
@@ -93,90 +92,71 @@ public class ConnectionTesterTest {
     }
 
     @Test
-    public void assertUriHostAllowed_rejectsLoopback() {
-        try {
-            ConnectionTester.assertUriHostAllowed(URI.create("http://127.0.0.1:1/api"));
-            fail("expected IllegalArgumentException");
-        } catch (IllegalArgumentException e) {
-            assertTrue(e.getMessage().toLowerCase().contains("not allowed"));
-        }
+    void assertUriHostAllowed_rejectsLoopback() {
+        IllegalArgumentException ex = assertUriRejected("http://127.0.0.1:1/api");
+        assertTrue(ex.getMessage().toLowerCase().contains("not allowed"));
     }
 
     @Test
-    public void assertUriHostAllowed_rejectsNull() {
+    void assertUriHostAllowed_rejectsNull() {
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class, () -> ConnectionTester.assertUriHostAllowed(null));
         assertTrue(ex.getMessage().toLowerCase().contains("missing"));
     }
 
     @Test
-    public void assertUriHostAllowed_rejectsBadScheme() {
-        IllegalArgumentException ex = assertThrows(
-                IllegalArgumentException.class,
-                () -> ConnectionTester.assertUriHostAllowed(URI.create("ftp://portainer.example/")));
+    void assertUriHostAllowed_rejectsBadScheme() {
+        IllegalArgumentException ex = assertUriRejected("ftp://portainer.example/");
         assertTrue(ex.getMessage().toLowerCase().contains("scheme"));
     }
 
     @Test
-    public void assertUriHostAllowed_hostWithPort_stillBlocksLoopback() {
-        IllegalArgumentException ex = assertThrows(
-                IllegalArgumentException.class,
-                () -> ConnectionTester.assertUriHostAllowed(URI.create("https://127.0.0.1:9443/")));
+    void assertUriHostAllowed_hostWithPort_stillBlocksLoopback() {
+        IllegalArgumentException ex = assertUriRejected("https://127.0.0.1:9443/");
         assertTrue(ex.getMessage().toLowerCase().contains("not allowed"));
     }
 
     @Test
-    public void assertUriHostAllowed_ipv6Host_stillBlocksLoopback() {
-        IllegalArgumentException ex = assertThrows(
-                IllegalArgumentException.class,
-                () -> ConnectionTester.assertUriHostAllowed(URI.create("http://[::1]:8443/")));
+    void assertUriHostAllowed_ipv6Host_stillBlocksLoopback() {
+        IllegalArgumentException ex = assertUriRejected("http://[::1]:8443/");
         assertTrue(ex.getMessage().toLowerCase().contains("not allowed"));
     }
 
     @Test
-    public void assertUriHostAllowed_blankHost_fallsBackToAssertHostAllowed() {
-        IllegalArgumentException ex = assertThrows(
-                IllegalArgumentException.class,
-                () -> ConnectionTester.assertUriHostAllowed(URI.create("http:///")));
-        assertTrue(ex.getMessage().toLowerCase().contains("missing")
-                || ex.getMessage().toLowerCase().contains("invalid")
-                || ex.getMessage().toLowerCase().contains("resolv")
-                || ex.getMessage().toLowerCase().contains("not allowed"));
+    void assertUriHostAllowed_blankHost_fallsBackToAssertHostAllowed() {
+        IllegalArgumentException ex = assertUriRejected("http:///");
+        String msg = ex.getMessage().toLowerCase();
+        assertTrue(msg.contains("missing")
+                || msg.contains("invalid")
+                || msg.contains("resolv")
+                || msg.contains("not allowed"));
     }
 
     @Test
-    public void deferUnknownHost_doesNotThrowForUnresolvable() {
+    void deferUnknownHost_doesNotThrowForUnresolvable() {
         ConnectionTester.assertHostAllowed(
                 "https://no-such-host-portainer-test.invalid/",
                 ConnectionTester.DnsPolicy.DEFER_UNKNOWN_HOST);
     }
 
     @Test
-    public void requireResolved_rejectsUnresolvable() {
-        try {
-            ConnectionTester.assertHostAllowed(
-                    "https://no-such-host-portainer-test.invalid/",
-                    ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
-            fail("expected IllegalArgumentException");
-        } catch (IllegalArgumentException e) {
-            assertTrue(e.getMessage().toLowerCase().contains("resolv"));
-        }
+    void requireResolved_rejectsUnresolvable() {
+        assertBlocked(
+                "https://no-such-host-portainer-test.invalid/",
+                ConnectionTester.DnsPolicy.REQUIRE_RESOLVED,
+                "resolv");
     }
 
     @Test
-    public void requireResolved_rejectsMetadata() {
-        try {
-            ConnectionTester.assertHostAllowed(
-                    "http://169.254.169.254/",
-                    ConnectionTester.DnsPolicy.REQUIRE_RESOLVED);
-            fail("expected IllegalArgumentException");
-        } catch (IllegalArgumentException e) {
-            assertTrue(e.getMessage().toLowerCase().contains("not allowed"));
-        }
+    void requireResolved_rejectsMetadata() {
+        assertBlocked(
+                "http://169.254.169.254/",
+                ConnectionTester.DnsPolicy.REQUIRE_RESOLVED,
+                "not allowed");
     }
 
     @Test
-    public void assertHostAllowed_defaultDefer_blocksLocalhostAndLoopbackLiterals() {
+    void assertHostAllowed_defaultDefer_blocksLocalhostAndLoopbackLiterals() {
         assertBlocked("http://localhost/");
         assertBlocked("http://foo.localhost/");
         assertBlocked("http://127.0.0.1/");
@@ -185,40 +165,33 @@ public class ConnectionTesterTest {
     }
 
     @Test
-    public void assertHostAllowed_defaultDefer_blocksMetadataHostnames() {
+    void assertHostAllowed_defaultDefer_blocksMetadataHostnames() {
         assertBlocked("http://metadata/");
         assertBlocked("http://metadata.google.internal/");
         assertBlocked("http://metadata.google/");
     }
 
     @Test
-    public void assertHostAllowed_defaultDefer_unresolvableDoesNotThrow() {
+    void assertHostAllowed_defaultDefer_unresolvableDoesNotThrow() {
         assertDoesNotThrow(() -> ConnectionTester.assertHostAllowed(
                 "https://no-such-host-portainer-test.invalid/"));
     }
 
     @Test
-    public void allowLoopbackForTests_allows127ButStillBlocksMetadata() {
+    void allowLoopbackForTests_allows127ButStillBlocksMetadata() {
         System.setProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP, "true");
 
         assertDoesNotThrow(() -> ConnectionTester.assertHostAllowed("http://127.0.0.1/"));
-
-        IllegalArgumentException metadata = assertThrows(
-                IllegalArgumentException.class,
-                () -> ConnectionTester.assertHostAllowed("http://metadata.google.internal/"));
-        assertTrue(metadata.getMessage().toLowerCase().contains("not allowed"));
+        assertBlocked("http://metadata.google.internal/");
     }
 
     @Test
-    public void isIpv4LoopbackLiteral_blocksValid127() {
-        IllegalArgumentException ex = assertThrows(
-                IllegalArgumentException.class,
-                () -> ConnectionTester.assertHostAllowed("http://127.0.0.1/"));
-        assertTrue(ex.getMessage().toLowerCase().contains("not allowed"));
+    void isIpv4LoopbackLiteral_blocksValid127() {
+        assertBlocked("http://127.0.0.1/");
     }
 
     @Test
-    public void isIpv4LoopbackLiteral_ignoresInvalidPartCountsAndValues() {
+    void isIpv4LoopbackLiteral_ignoresInvalidPartCountsAndValues() {
         // Not a 4-octet literal → hostname blocklist skip; DEFER tolerates failed/odd DNS.
         assertDoesNotThrow(() -> ConnectionTester.assertHostAllowed(
                 "http://127.0.0.256/", ConnectionTester.DnsPolicy.DEFER_UNKNOWN_HOST));
@@ -229,9 +202,21 @@ public class ConnectionTesterTest {
                 "http://127.1/", ConnectionTester.DnsPolicy.DEFER_UNKNOWN_HOST));
     }
 
+    private static IllegalArgumentException assertUriRejected(String spec) {
+        URI uri = URI.create(spec);
+        return assertThrows(
+                IllegalArgumentException.class,
+                () -> ConnectionTester.assertUriHostAllowed(uri));
+    }
+
     private static void assertBlocked(String url) {
+        assertBlocked(url, ConnectionTester.DnsPolicy.DEFER_UNKNOWN_HOST, "not allowed");
+    }
+
+    private static void assertBlocked(String url, ConnectionTester.DnsPolicy policy, String needle) {
         IllegalArgumentException ex = assertThrows(
-                IllegalArgumentException.class, () -> ConnectionTester.assertHostAllowed(url));
-        assertTrue(ex.getMessage().toLowerCase().contains("not allowed"), ex.getMessage());
+                IllegalArgumentException.class,
+                () -> ConnectionTester.assertHostAllowed(url, policy));
+        assertTrue(ex.getMessage().toLowerCase().contains(needle), ex.getMessage());
     }
 }

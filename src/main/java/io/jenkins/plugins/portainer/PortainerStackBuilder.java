@@ -9,6 +9,7 @@ import hudson.Launcher;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
+import hudson.model.Descriptor;
 import hudson.model.Item;
 import hudson.model.Run;
 import hudson.model.TaskListener;
@@ -16,7 +17,6 @@ import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
-import jenkins.tasks.SimpleBuildStep;
 import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
@@ -39,12 +39,10 @@ import java.util.logging.Logger;
  * {@link StackSource#YAML} (string create / {@code StackFileContent} update).
  * Portainer connection: default {@link ConnectionMode#INHERIT} from System
  * ({@link PortainerGlobalConfiguration}); optional {@link ConnectionMode#MANUAL} URL + API key.
- * Vault overlay: default Not connected ({@code none}); optional Inherit from HashiCorp Vault Plugin
- * System (soft dep); optional Manual
- * HTTP AppRole ({@code vaultUrl} + Username/Password); or {@link ConnectionMode#NONE} to disable
- * overlay. Path/mount apply when Inherit or Manual.
+ * Vault overlay: nested {@link VaultConnection} ({@code vaultNone} / {@code vaultInherit} /
+ * {@code vaultManual}). Default Not connected. Path/mount apply when Inherit or Manual.
  */
-public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
+public class PortainerStackBuilder extends AbstractVaultStep {
 
     private static final Logger LOGGER = Logger.getLogger(PortainerStackBuilder.class.getName());
 
@@ -99,20 +97,6 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     private String portainerCredentialsId;
 
     /**
-     * Vault connection: {@link #MODE_NONE} (default), Inherit, or Manual. Null in old configs —
-     * see {@link #getVaultConnectionMode()} migration.
-     */
-    private String vaultConnectionMode;
-    /** Manual Vault URL (ignored when Inherit). */
-    private String vaultUrl;
-    /** Manual Username/Password credential: username = role_id, password = secret_id. */
-    private String vaultAppRoleCredentialsId;
-    private String vaultPath;
-    private String vaultMount;
-    private String vaultNamespace;
-    private String vaultVersion;
-
-    /**
      * When true, also write DEBUG HTTP/timing lines to the build console.
      * Default false — DEBUG stays on JUL FINE only.
      */
@@ -130,6 +114,10 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         this.stackType =
                 stackType == null || stackType.isBlank() ? TYPE_COMPOSE : stackType.trim();
         this.stackName = stackName == null ? "" : stackName.trim();
+    }
+
+    private Object readResolve() {
+        return readResolveVault(false);
     }
 
     public String getEndpointId() {
@@ -283,86 +271,13 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         this.portainerCredentialsId = blankToNull(portainerCredentialsId);
     }
 
-    /**
-     * Vault connection mode. Default {@link #MODE_NONE} (Not connected).
-     * Jobs that only have {@code vaultUrl} / AppRole credentials (no mode field) resolve to
-     * {@link #MODE_MANUAL}. Jobs that only have {@code vaultPath} (no mode field) resolve to
-     * {@link #MODE_INHERIT}. Explicit {@link #MODE_NONE} disables overlay (preferred over empty path).
-     */
-    public String getVaultConnectionMode() {
-        if (vaultConnectionMode != null && !vaultConnectionMode.isBlank()) {
-            return ConnectionMode.normalize(vaultConnectionMode, MODE_NONE);
-        }
-        if (nonBlank(vaultUrl) || nonBlank(vaultAppRoleCredentialsId)) {
-            return MODE_MANUAL;
-        }
-        // Path-only configs without a mode field stay on Inherit.
-        if (nonBlank(vaultPath)) {
-            return MODE_INHERIT;
-        }
-        return MODE_NONE;
-    }
-
-    /**
-     * Pipeline / XStream / Freestyle string mode ({@code inherit}|{@code manual}|{@code none}).
-     */
-    @DataBoundSetter
-    public void setVaultConnectionMode(String vaultConnectionMode) {
-        this.vaultConnectionMode = ConnectionMode.normalize(vaultConnectionMode, MODE_NONE);
-    }
-
-    public String getVaultUrl() {
-        return vaultUrl;
+    public VaultConnection getVault() {
+        return vault != null ? vault : new VaultNone();
     }
 
     @DataBoundSetter
-    public void setVaultUrl(String vaultUrl) {
-        this.vaultUrl = blankToNull(vaultUrl);
-    }
-
-    public String getVaultAppRoleCredentialsId() {
-        return vaultAppRoleCredentialsId;
-    }
-
-    @DataBoundSetter
-    public void setVaultAppRoleCredentialsId(String vaultAppRoleCredentialsId) {
-        this.vaultAppRoleCredentialsId = blankToNull(vaultAppRoleCredentialsId);
-    }
-
-    public String getVaultPath() {
-        return vaultPath;
-    }
-
-    @DataBoundSetter
-    public void setVaultPath(String vaultPath) {
-        this.vaultPath = blankToNull(vaultPath);
-    }
-
-    public String getVaultMount() {
-        return vaultMount;
-    }
-
-    @DataBoundSetter
-    public void setVaultMount(String vaultMount) {
-        this.vaultMount = blankToNull(vaultMount);
-    }
-
-    public String getVaultNamespace() {
-        return vaultNamespace;
-    }
-
-    @DataBoundSetter
-    public void setVaultNamespace(String vaultNamespace) {
-        this.vaultNamespace = blankToNull(vaultNamespace);
-    }
-
-    public String getVaultVersion() {
-        return vaultVersion;
-    }
-
-    @DataBoundSetter
-    public void setVaultVersion(String vaultVersion) {
-        this.vaultVersion = blankToNull(vaultVersion);
+    public void setVault(VaultConnection vault) {
+        this.vault = vault;
     }
 
     public boolean isVerboseLogging() {
@@ -528,10 +443,12 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         if ("off".equals(vaultModeLabel)) {
             return null;
         }
-        return PortainerConnections.abortOn(
-                log,
-                () -> VaultFields.parse(
-                        vaultPath, vaultMount, vaultVersion, vaultNamespace, vaultUrl, buildEnv));
+        VaultConnection connection = vaultResolved();
+        return PortainerConnections.abortOn(log, () -> connection.toFields(buildEnv));
+    }
+
+    private VaultConnection vaultResolved() {
+        return vault != null ? vault : new VaultNone();
     }
 
     private void logStackPlan(
@@ -555,20 +472,21 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
             EnvVars buildEnv,
             Item item,
             PortainerBuildLogger log) throws AbortException {
+        VaultConnection vaultConnection = vaultResolved();
         if (vaultFields != null && nonBlank(vaultFields.pathRaw)) {
             log.debug(PortainerBuildLogger.formatVaultConnection(
-                    getVaultConnectionMode(),
+                    vaultConnection.getMode(),
                     vaultFields.pathRaw,
                     vaultFields.mount,
                     vaultFields.version));
         }
         VaultConnections.runPreflight(new VaultConnections.Request(
-                getVaultConnectionMode(),
+                vaultConnection.getMode(),
                 false,
-                vaultUrl,
-                vaultAppRoleCredentialsId,
-                vaultPath,
-                vaultNamespace,
+                vaultConnection.getVaultUrl(),
+                vaultConnection.getVaultAppRoleCredentialsId(),
+                vaultConnection.getVaultPath(),
+                vaultConnection.getVaultNamespace(),
                 run,
                 buildEnv,
                 item,
@@ -820,12 +738,13 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         int readMs = connection == null
                 ? PortainerGlobalConfiguration.DEFAULT_READ_TIMEOUT_MS
                 : connection.readTimeoutMs;
+        VaultConnection vaultConnection = vaultResolved();
         return VaultKv.resolve(new VaultKv.Request(
                 new VaultKv.Request.VaultSpec(
                         VaultKv.Policy.OPTIONAL_SOFT_SKIP,
-                        getVaultConnectionMode(),
+                        vaultConnection.getMode(),
                         fields,
-                        vaultAppRoleCredentialsId),
+                        vaultConnection.getVaultAppRoleCredentialsId()),
                 new VaultKv.Request.RunContext(run, buildEnv, item),
                 new VaultKv.Request.Timeouts(connectMs, readMs),
                 log));
@@ -837,11 +756,12 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
 
     /** Safe config label: {@code off} when Not connected or path empty; else inherit|manual. */
     String vaultModeLabelForLog(EnvVars buildEnv) {
-        if (ConnectionMode.isNone(getVaultConnectionMode())) {
+        VaultConnection vaultConnection = vaultResolved();
+        if (vaultConnection.isNone()) {
             return "off";
         }
-        return nonBlank(VaultFields.expandOptional(vaultPath, buildEnv))
-                ? getVaultConnectionMode()
+        return nonBlank(VaultFields.expandOptional(vaultConnection.getVaultPath(), buildEnv))
+                ? vaultConnection.getMode()
                 : "off";
     }
 
@@ -997,10 +917,7 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
 
     @Symbol("portainerStack")
     @Extension
-    public static final class DescriptorImpl extends BuildStepDescriptor<Builder> {
-
-        /** Read-only summary when Vault connection is Not connected. */
-        public static final String VAULT_NONE_SUMMARY = "Vault disabled.";
+        public static final class DescriptorImpl extends BuildStepDescriptor<Builder> {
 
         @Override
         public boolean isApplicable(Class<? extends AbstractProject> jobType) {
@@ -1031,6 +948,10 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
 
         public String getVaultInheritSummary() {
             return VaultPluginInherit.inheritSummary();
+        }
+
+        public List<Descriptor<VaultConnection>> getVaultDescriptors() {
+            return VaultConnection.descriptors(true);
         }
 
         @POST
@@ -1129,68 +1050,6 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         }
 
         @POST
-        public FormValidation doCheckVaultUrl(
-                @QueryParameter String value,
-                @QueryParameter String vaultConnectionMode,
-                @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            if (!ConnectionMode.isManual(vaultConnectionMode)) {
-                return FormValidation.ok();
-            }
-            if (value == null || value.isBlank()) {
-                return FormValidation.ok();
-            }
-            try {
-                VaultUrl.normalizeBaseUrlSyntaxOnly(value);
-                return FormValidation.ok();
-            } catch (IllegalArgumentException e) {
-                return FormValidation.error(e.getMessage());
-            }
-        }
-
-        @POST
-        public FormValidation doCheckVaultPath(@QueryParameter String value, @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            if (value == null || value.isBlank()) {
-                return FormValidation.ok();
-            }
-            try {
-                VaultClient.normalizeSecretPath(value);
-                return FormValidation.ok();
-            } catch (IllegalArgumentException e) {
-                return FormValidation.error(e.getMessage());
-            }
-        }
-
-        @POST
-        public FormValidation doCheckVaultMount(@QueryParameter String value, @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            if (value == null || value.isBlank()) {
-                return FormValidation.ok();
-            }
-            try {
-                VaultClient.normalizeMount(value);
-                return FormValidation.ok();
-            } catch (IllegalArgumentException e) {
-                return FormValidation.error(e.getMessage());
-            }
-        }
-
-        @POST
-        public FormValidation doCheckVaultVersion(@QueryParameter String value, @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            if (value == null || value.isBlank()) {
-                return FormValidation.ok();
-            }
-            try {
-                VaultClient.parseVersion(value);
-                return FormValidation.ok();
-            } catch (IllegalArgumentException e) {
-                return FormValidation.error(e.getMessage());
-            }
-        }
-
-        @POST
         public ListBoxModel doFillStackTypeItems(@AncestorInPath Item item) {
             PortainerConnections.checkConfigure(item);
             ListBoxModel m = new ListBoxModel();
@@ -1209,12 +1068,6 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
         public ListBoxModel doFillPortainerCredentialsIdItems(
                 @AncestorInPath Item item, @QueryParameter String portainerCredentialsId) {
             return PortainerCredentials.fillSecretText(item, portainerCredentialsId);
-        }
-
-        @POST
-        public ListBoxModel doFillVaultAppRoleCredentialsIdItems(
-                @AncestorInPath Item item, @QueryParameter String vaultAppRoleCredentialsId) {
-            return PortainerCredentials.fillVaultAppRoleCredentials(item, vaultAppRoleCredentialsId);
         }
 
         private static FormValidation checkEnum(String value, String label, String... allowed) {

@@ -5,11 +5,20 @@ import com.cloudbees.plugins.credentials.SystemCredentialsProvider;
 import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import hudson.model.AbstractProject;
 import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
+import hudson.model.Item;
+import hudson.model.Items;
 import hudson.model.Result;
 import hudson.model.TaskListener;
+import hudson.model.User;
+import hudson.security.ACL;
+import hudson.security.ACLContext;
+import hudson.util.FormValidation;
 import hudson.util.Secret;
+import jenkins.model.Jenkins;
+import net.sf.json.JSONObject;
 import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;
 import org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition;
 import org.jenkinsci.plugins.workflow.job.WorkflowJob;
@@ -18,9 +27,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.MockAuthorizationStrategy;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
+import org.kohsuke.stapler.Stapler;
+import org.springframework.security.access.AccessDeniedException;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -29,7 +42,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @WithJenkins
@@ -117,7 +133,6 @@ public class PortainerSwarmSecretBuilderTest {
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
         applyManualVault(step);
-        step.setVaultPath("applications/example/systems/rabbitmq");
         step.setSecretKeys("rabbitmq_signing_key");
         project.getBuildersList().add(step);
 
@@ -139,7 +154,6 @@ public class PortainerSwarmSecretBuilderTest {
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
         applyManualVault(step);
-        step.setVaultPath("applications/example/systems/rabbitmq");
         step.setSecretKeys("rabbitmq_signing_key");
         project.getBuildersList().add(step);
 
@@ -157,7 +171,6 @@ public class PortainerSwarmSecretBuilderTest {
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
         applyManualVault(step);
-        step.setVaultPath("applications/example/systems/rabbitmq");
         step.setSecretKeys("rabbitmq_signing_key");
         step.setValidateOnly(true);
         project.getBuildersList().add(step);
@@ -179,7 +192,6 @@ public class PortainerSwarmSecretBuilderTest {
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
         applyManualVault(step);
-        step.setVaultPath("applications/example/systems/rabbitmq");
         step.setSecretKeys("rabbitmq_signing_key");
         project.getBuildersList().add(step);
 
@@ -239,6 +251,151 @@ public class PortainerSwarmSecretBuilderTest {
         assertTrue(d.isVaultPluginPresent());
         assertFalse(d.isVaultInheritReady());
         assertEquals("Vault Plugin is not configured.", d.getVaultInheritSummary());
+        assertFalse(d.getVaultDescriptors().stream().anyMatch(x -> x instanceof VaultNone.DescriptorImpl));
+        assertTrue(d.isApplicable(FreeStyleProject.class));
+        assertTrue(d.isApplicable(AbstractProject.class));
+        assertNotNull(d.getPortainerConnectionSummary());
+    }
+
+    @Test
+    public void vault_defaultsToInherit_andRejectsNone(JenkinsRule jenkins) {
+        PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder(null);
+        assertEquals("", step.getEndpointId());
+        assertInstanceOf(VaultInherit.class, step.getVault());
+        step.setVault(new VaultNone());
+        assertInstanceOf(VaultInherit.class, step.getVault());
+        step.setVault(null);
+        assertInstanceOf(VaultInherit.class, step.getVault());
+        step.setPortainerConnectionMode("none");
+        assertEquals(PortainerSwarmSecretBuilder.MODE_INHERIT, step.getPortainerConnectionMode());
+        step.setSecretKeys(null);
+        assertEquals("", step.getSecretKeys());
+        step.setPortainerUrl(" https://portainer.example ");
+        assertEquals("https://portainer.example", step.getPortainerUrl());
+        step.setPortainerCredentialsId("  ");
+        assertNull(step.getPortainerCredentialsId());
+        step.setPortainerCredentialsId("portainer-api-key");
+        assertEquals("portainer-api-key", step.getPortainerCredentialsId());
+        step.setVerboseLogging(true);
+        assertTrue(step.isVerboseLogging());
+        step.setPruneOld(true);
+        assertTrue(step.isPruneOld());
+    }
+
+    @Test
+    public void stapler_bindsVaultInheritAndManual(JenkinsRule jenkins) throws Exception {
+        PortainerSwarmSecretBuilder inherit = jenkins.executeOnServer(() -> {
+            JSONObject json = secretJson(vaultJson(VaultInherit.class, null, null, "apps/demo", "secret"));
+            PortainerSwarmSecretBuilder.DescriptorImpl d =
+                    jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class);
+            return (PortainerSwarmSecretBuilder) d.newInstance(Stapler.getCurrentRequest2(), json);
+        });
+        assertInstanceOf(VaultInherit.class, inherit.getVault());
+        assertEquals("apps/demo", inherit.getVault().getVaultPath());
+        assertEquals("secret", inherit.getVault().getVaultMount());
+
+        PortainerSwarmSecretBuilder manual = jenkins.executeOnServer(() -> {
+            JSONObject json = secretJson(vaultJson(
+                    VaultManual.class,
+                    "https://vault.example:8200",
+                    "vault-approle",
+                    "apps/demo",
+                    "secret"));
+            PortainerSwarmSecretBuilder.DescriptorImpl d =
+                    jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class);
+            return (PortainerSwarmSecretBuilder) d.newInstance(Stapler.getCurrentRequest2(), json);
+        });
+        assertInstanceOf(VaultManual.class, manual.getVault());
+        assertEquals("https://vault.example:8200", manual.getVault().getVaultUrl());
+        assertEquals("vault-approle", manual.getVault().getVaultAppRoleCredentialsId());
+    }
+
+    @Test
+    public void stapler_bindsVaultNone_asInherit(JenkinsRule jenkins) throws Exception {
+        PortainerSwarmSecretBuilder step = jenkins.executeOnServer(() -> {
+            JSONObject json = secretJson(vaultJson(VaultNone.class, null, null, null, null));
+            PortainerSwarmSecretBuilder.DescriptorImpl d =
+                    jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class);
+            return (PortainerSwarmSecretBuilder) d.newInstance(Stapler.getCurrentRequest2(), json);
+        });
+        assertInstanceOf(VaultInherit.class, step.getVault());
+    }
+
+    @Test
+    public void xstream_legacyVaultModes(JenkinsRule jenkins) throws Exception {
+        PortainerSwarmSecretBuilder none = loadBuilder(jenkins, "secret-legacy-vault-none.xml");
+        assertInstanceOf(VaultInherit.class, none.getVault());
+        assertEquals("apps/demo", none.getVault().getVaultPath());
+        assertFalse(Items.XSTREAM2.toXML(none).contains("<vaultConnectionMode>"));
+
+        PortainerSwarmSecretBuilder inherit = loadBuilder(jenkins, "secret-legacy-vault-inherit.xml");
+        assertInstanceOf(VaultInherit.class, inherit.getVault());
+        assertEquals("apps/demo", inherit.getVault().getVaultPath());
+        assertEquals("secret", inherit.getVault().getVaultMount());
+
+        PortainerSwarmSecretBuilder manual = loadBuilder(jenkins, "secret-legacy-vault-manual.xml");
+        assertInstanceOf(VaultManual.class, manual.getVault());
+        assertEquals("https://vault.example:8200", manual.getVault().getVaultUrl());
+        assertEquals("vault-approle", manual.getVault().getVaultAppRoleCredentialsId());
+        assertEquals("apps/demo", manual.getVault().getVaultPath());
+
+        PortainerSwarmSecretBuilder nestedNone = loadBuilder(jenkins, "secret-nested-vault-none.xml");
+        assertInstanceOf(VaultInherit.class, nestedNone.getVault());
+    }
+
+    @Test
+    public void configRoundtrip_keepsInherit(JenkinsRule jenkins) throws Exception {
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
+        VaultInherit inherit = new VaultInherit();
+        inherit.setVaultPath("apps/demo");
+        step.setVault(inherit);
+        step.setSecretKeys("app_key");
+        project.getBuildersList().add(step);
+
+        jenkins.configRoundtrip(project);
+        PortainerSwarmSecretBuilder loaded = project.getBuildersList().get(PortainerSwarmSecretBuilder.class);
+        assertInstanceOf(VaultInherit.class, loaded.getVault());
+        assertFalse(loaded.getVault() instanceof VaultNone);
+    }
+
+    @Test
+    public void formValidation_secretKeysAndConnection(JenkinsRule jenkins) throws Exception {
+        PortainerSwarmSecretBuilder.DescriptorImpl d =
+                jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class);
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+
+        assertEquals(FormValidation.Kind.ERROR, d.doCheckSecretKeys("", project).kind);
+        assertEquals(FormValidation.Kind.ERROR, d.doCheckSecretKeys("   ", project).kind);
+        assertEquals(FormValidation.Kind.OK, d.doCheckSecretKeys("app_key", project).kind);
+        assertEquals(FormValidation.Kind.ERROR, d.doCheckSecretKeys("APP_KEY=${APP_KEY}", project).kind);
+
+        assertEquals(FormValidation.Kind.ERROR, d.doCheckEndpointId("1", "inherit", project).kind);
+        assertEquals(FormValidation.Kind.OK, d.doCheckEndpointId("1", "manual", project).kind);
+        assertEquals(FormValidation.Kind.ERROR, d.doCheckEndpointId("", "manual", project).kind);
+        assertEquals(FormValidation.Kind.OK, d.doCheckPortainerUrl("", "inherit", project).kind);
+        assertEquals(
+                FormValidation.Kind.ERROR,
+                d.doCheckPortainerUrl("", "manual", project).kind);
+        assertEquals(
+                FormValidation.Kind.OK,
+                d.doCheckPortainerUrl("https://portainer.example", "manual", project).kind);
+        assertNotNull(d.doFillPortainerCredentialsIdItems(project, ""));
+    }
+
+    @Test
+    public void doCheckSecretKeys_withoutConfigure_denied(JenkinsRule jenkins) throws Exception {
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+        jenkins.jenkins.setSecurityRealm(jenkins.createDummySecurityRealm());
+        jenkins.jenkins.setAuthorizationStrategy(
+                new MockAuthorizationStrategy()
+                        .grant(Jenkins.READ, Item.READ).everywhere().to("viewer"));
+
+        PortainerSwarmSecretBuilder.DescriptorImpl d =
+                jenkins.jenkins.getDescriptorByType(PortainerSwarmSecretBuilder.DescriptorImpl.class);
+        try (ACLContext ignored = ACL.as(User.getById("viewer", true))) {
+            assertThrows(AccessDeniedException.class, () -> d.doCheckSecretKeys("app_key", project));
+        }
     }
 
     private void startVaultServer() throws IOException {
@@ -258,19 +415,64 @@ public class PortainerSwarmSecretBuilderTest {
     }
 
     private void applyManualVault(PortainerSwarmSecretBuilder step) {
-        step.setVaultConnectionMode(PortainerSwarmSecretBuilder.MODE_MANUAL);
-        step.setVaultUrl(vaultBase);
-        step.setVaultAppRoleCredentialsId("vault-approle");
+        VaultManual manual = new VaultManual(vaultBase, "vault-approle");
+        manual.setVaultPath("applications/example/systems/rabbitmq");
+        step.setVault(manual);
     }
 
     private String pipelineSecretArgs(boolean validateOnly) {
         return "    endpointId: '1',\n"
-                + "    vaultConnectionMode: 'manual',\n"
-                + "    vaultUrl: '" + vaultBase + "',\n"
-                + "    vaultAppRoleCredentialsId: 'vault-approle',\n"
-                + "    vaultPath: 'applications/example/systems/rabbitmq',\n"
+                + "    vault: vaultManual(\n"
+                + "      vaultUrl: '" + vaultBase + "',\n"
+                + "      vaultAppRoleCredentialsId: 'vault-approle',\n"
+                + "      vaultPath: 'applications/example/systems/rabbitmq'\n"
+                + "    ),\n"
                 + "    secretKeys: 'rabbitmq_signing_key'"
                 + (validateOnly ? ",\n    validateOnly: true\n" : "\n");
+    }
+
+    private static JSONObject secretJson(JSONObject vault) {
+        JSONObject json = new JSONObject();
+        json.put("stapler-class", PortainerSwarmSecretBuilder.class.getName());
+        json.put("$class", PortainerSwarmSecretBuilder.class.getName());
+        json.put("endpointId", "1");
+        json.put("secretKeys", "app_key");
+        json.put("portainerConnectionMode", "inherit");
+        json.put("vault", vault);
+        return json;
+    }
+
+    private static JSONObject vaultJson(
+            Class<? extends VaultConnection> type,
+            String url,
+            String credentialsId,
+            String path,
+            String mount) {
+        JSONObject vault = new JSONObject();
+        vault.put("stapler-class", type.getName());
+        vault.put("$class", type.getName());
+        if (url != null) {
+            vault.put("vaultUrl", url);
+        }
+        if (credentialsId != null) {
+            vault.put("vaultAppRoleCredentialsId", credentialsId);
+        }
+        if (path != null) {
+            vault.put("vaultPath", path);
+        }
+        if (mount != null) {
+            vault.put("vaultMount", mount);
+        }
+        return vault;
+    }
+
+    private static PortainerSwarmSecretBuilder loadBuilder(JenkinsRule jenkins, String resource)
+            throws IOException {
+        assertNotNull(jenkins.jenkins);
+        try (InputStream in = PortainerSwarmSecretBuilderTest.class.getResourceAsStream(resource)) {
+            assertNotNull(in, resource);
+            return (PortainerSwarmSecretBuilder) Items.XSTREAM2.fromXML(in);
+        }
     }
 
     private static String vaultKvJson(String key, String value) {

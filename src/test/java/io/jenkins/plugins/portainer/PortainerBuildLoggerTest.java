@@ -7,9 +7,13 @@ import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.logging.Handler;
 import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -262,21 +266,7 @@ class PortainerBuildLoggerTest {
         Logger jul = Logger.getLogger("PortainerBuildLoggerTest.infoJul");
         Level previous = jul.getLevel();
         jul.setLevel(Level.ALL);
-        java.util.List<java.util.logging.LogRecord> records = new java.util.ArrayList<>();
-        java.util.logging.Handler handler = new java.util.logging.Handler() {
-            @Override
-            public void publish(java.util.logging.LogRecord record) {
-                records.add(record);
-            }
-
-            @Override
-            public void flush() {
-            }
-
-            @Override
-            public void close() {
-            }
-        };
+        RecordingHandler handler = new RecordingHandler();
         jul.addHandler(handler);
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         try (StreamTaskListener listener = new StreamTaskListener(buf, StandardCharsets.UTF_8);
@@ -291,10 +281,33 @@ class PortainerBuildLoggerTest {
         String console = buf.toString(StandardCharsets.UTF_8);
         assertTrue(console.contains("[INFO] Stack name=demo"));
         assertTrue(console.contains("[WARN] Soft prune"));
-        assertTrue(records.stream().noneMatch(r -> r.getLevel() == Level.INFO));
-        assertTrue(records.stream().anyMatch(
+        assertTrue(handler.records.stream().noneMatch(r -> r.getLevel() == Level.INFO));
+        assertTrue(handler.records.stream().anyMatch(
                 r -> r.getLevel() == Level.FINE && r.getMessage().contains("Stack name=demo")));
-        assertTrue(records.stream().anyMatch(
+        assertTrue(handler.records.stream().anyMatch(
                 r -> r.getLevel() == Level.WARNING && r.getMessage().contains("Soft prune")));
+    }
+
+    private static final class RecordingHandler extends Handler {
+        final List<LogRecord> records = new ArrayList<>();
+        private boolean closed;
+
+        @Override
+        public void publish(LogRecord record) {
+            if (closed || record == null) {
+                return;
+            }
+            records.add(record);
+        }
+
+        @Override
+        public void flush() {
+            // In-memory list; publish already stored the record.
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+        }
     }
 }

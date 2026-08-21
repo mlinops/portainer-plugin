@@ -9,7 +9,9 @@
 node {
     portainerStackSecret(
         endpointId: '1',
-        vaultPath: 'applications/example/systems/rabbitmq',
+        vault: vaultInherit(
+            vaultPath: 'applications/example/systems/rabbitmq'
+        ),
         secretKeys: '''rabbitmq_signing_key
 erlang_cookie''',
     )

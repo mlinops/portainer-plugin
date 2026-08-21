@@ -38,45 +38,9 @@
       <f:entry title="${%Environment variables}" field="env">
         <f:textarea/>
       </f:entry>
-      <f:entry title="${%Vault}" help="${descriptor.getHelpFile('vaultConnectionMode')}"/>
-      <j:set var="help" value="${null}"/>
-      <f:radioBlock inline="true" name="vaultConnectionMode" value="none" title="${%Not connected}"
-                    checked="${instance == null || instance.vaultConnectionMode == 'none'}">
-        <f:entry>
-          <f:description>${descriptor.VAULT_NONE_SUMMARY}</f:description>
-        </f:entry>
-      </f:radioBlock>
-      <f:radioBlock inline="true" name="vaultConnectionMode" value="inherit" title="${%Inherit from System}"
-                    checked="${instance != null &amp;&amp; instance.vaultConnectionMode == 'inherit'}">
-        <f:entry>
-          <f:description>${descriptor.vaultInheritSummary}</f:description>
-        </f:entry>
-      </f:radioBlock>
-      <f:radioBlock inline="true" name="vaultConnectionMode" value="manual" title="${%Manual}"
-                    checked="${instance != null &amp;&amp; instance.vaultConnectionMode == 'manual'}">
-        <f:entry title="${%Vault URL}" field="vaultUrl">
-          <f:textbox/>
-        </f:entry>
-        <f:entry title="${%Vault AppRole credentials}" field="vaultAppRoleCredentialsId">
-          <c:select/>
-        </f:entry>
-      </f:radioBlock>
-      <!-- One name per field: inline radioBlocks would otherwise submit duplicate keys as JSON arrays. -->
-      <f:entry title="${%Vault KV mount}" field="vaultMount">
-        <f:textbox default="secret"/>
-      </f:entry>
-      <f:entry title="${%Vault path}" field="vaultPath">
-        <f:textbox/>
-      </f:entry>
-      <f:entry title="${%Vault namespace Enterprise}" field="vaultNamespace">
-        <f:textbox/>
-      </f:entry>
-      <f:entry title="${%Vault secret version}" field="vaultVersion">
-        <f:textbox/>
-      </f:entry>
-      <f:entry>
-        <hr class="jenkins-!-margin-block-3"/>
-      </f:entry>
+      <f:dropdownDescriptorSelector field="vault" title="${%Vault}"
+                                    descriptors="${descriptor.vaultDescriptors}"/>
+      <div style="border-top:var(--jenkins-border);" class="jenkins-!-margin-bottom-3"/>
       <f:entry title="${%Prune services}" field="prune">
         <f:checkbox/>
       </f:entry>

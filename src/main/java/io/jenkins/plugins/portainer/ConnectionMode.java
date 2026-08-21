@@ -6,8 +6,8 @@ import java.util.Locale;
  * Portainer / Vault connection mode on the build step.
  * <p>
  * Portainer: {@link #INHERIT} (default) or {@link #MANUAL}.
- * Vault: {@link #NONE} (default), {@link #INHERIT}, or {@link #MANUAL}.
- * Freestyle {@code f:radioBlock inline="true"} and Pipeline both bind a plain string.
+ * Vault nested types use these strings via {@link VaultConnection#getMode()}.
+ * Freestyle Portainer still binds {@code f:radioBlock inline="true"} as a plain string.
  */
 final class ConnectionMode {
 

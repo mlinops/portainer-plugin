@@ -11,8 +11,8 @@
 //   4. (Optional Vault Manual) Username/Password: username=AppRole role_id, password=secret_id
 //
 // Symbol: portainerStack
-// Defaults: portainerConnectionMode=inherit, vaultConnectionMode=none (Not connected), stackSource=repository
-// Vault: none (Not connected, default) | inherit | manual
+// Defaults: portainerConnectionMode=inherit, vault: vaultNone() (Not connected), stackSource=repository
+// Vault: vaultNone() | vaultInherit(...) | vaultManual(...)
 // Behavior: deploy if the stack does not exist on the endpoint; otherwise redeploy/update.
 // Hosts in docs/examples: portainer.example / gitlab.example / vault.example only
 //
@@ -30,7 +30,7 @@ pipeline {
                 portainerStack(
                     // portainerConnectionMode: 'inherit',  // default — System Portainer
                     // stackSource: 'repository',           // default — Git
-                    // vaultConnectionMode: 'none',         // default — Vault Off
+                    // vault: vaultNone(),                   // default — Vault Off
                     endpointId: '1',
                     stackType: 'compose',
                     stackName: 'myapp',
@@ -85,7 +85,7 @@ services:
                     stackName: 'myapp',
                     repositoryUrl: 'https://gitlab.example/group/stack.git',
                     composeFilePath: 'docker-compose.yml',
-                    vaultConnectionMode: 'none',
+                    vault: vaultNone(),
                     env: "IMAGE_TAG=${env.BUILD_NUMBER}"
                 )
             }
@@ -102,10 +102,11 @@ services:
 IMAGE_TAG=from-step
 FEATURE_FLAG=true
 ''',
-                    vaultConnectionMode: 'inherit',
-                    vaultPath: 'myapp/prod',
-                    vaultMount: 'secret'
-                    // vaultNamespace: 'team-a'   // optional Enterprise override
+                    vault: vaultInherit(
+                        vaultPath: 'myapp/prod',
+                        vaultMount: 'secret'
+                        // vaultNamespace: 'team-a'   // optional Enterprise override
+                    )
                 )
             }
         }
@@ -121,13 +122,14 @@ FEATURE_FLAG=true
 IMAGE_TAG=from-step
 FEATURE_FLAG=true
 ''',
-                    vaultConnectionMode: 'manual',
-                    vaultUrl: 'https://vault.example:8200',
-                    vaultAppRoleCredentialsId: 'vault-approle',
-                    vaultPath: 'myapp/prod',
-                    vaultMount: 'secret'
-                    // vaultNamespace: 'team-a',   // Enterprise only; leave empty for OSS
-                    // vaultVersion: '3'           // Manual only; empty = latest
+                    vault: vaultManual(
+                        vaultUrl: 'https://vault.example:8200',
+                        vaultAppRoleCredentialsId: 'vault-approle',
+                        vaultPath: 'myapp/prod',
+                        vaultMount: 'secret'
+                        // vaultNamespace: 'team-a',   // Enterprise only; leave empty for OSS
+                        // vaultVersion: '3'           // Manual only; empty = latest
+                    )
                 )
             }
         }
