@@ -8,6 +8,7 @@ import hudson.Launcher;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
+import hudson.model.Descriptor;
 import hudson.model.Item;
 import hudson.model.Run;
 import hudson.model.TaskListener;
@@ -52,6 +53,8 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
      */
     @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
     private String secretKeys = "";
+    private VaultConnection vault;
+    /** Former persisted field; migrated in {@link #readResolve()}. */
     private String vaultConnectionMode;
     private String vaultUrl;
     private String vaultAppRoleCredentialsId;
@@ -72,6 +75,31 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
         this.endpointId = endpointId == null ? "" : endpointId.trim();
     }
 
+    private Object readResolve() {
+        if (vault == null) {
+            vault = VaultConnection.fromLegacy(
+                    vaultConnectionMode,
+                    vaultUrl,
+                    vaultAppRoleCredentialsId,
+                    vaultPath,
+                    vaultMount,
+                    vaultNamespace,
+                    vaultVersion,
+                    true);
+        }
+        if (vault instanceof VaultNone) {
+            vault = new VaultInherit();
+        }
+        vaultConnectionMode = null;
+        vaultUrl = null;
+        vaultAppRoleCredentialsId = null;
+        vaultPath = null;
+        vaultMount = null;
+        vaultNamespace = null;
+        vaultVersion = null;
+        return this;
+    }
+
     public String getEndpointId() {
         return endpointId;
     }
@@ -85,72 +113,20 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
         this.secretKeys = secretKeys == null ? "" : secretKeys;
     }
 
-    public String getVaultConnectionMode() {
-        String mode = ConnectionMode.normalize(vaultConnectionMode, MODE_INHERIT);
-        return ConnectionMode.isNone(mode) ? MODE_INHERIT : mode;
+    public VaultConnection getVault() {
+        return vaultResolved();
     }
 
     @DataBoundSetter
-    public void setVaultConnectionMode(String vaultConnectionMode) {
-        String normalized = ConnectionMode.normalize(vaultConnectionMode, MODE_INHERIT);
-        this.vaultConnectionMode = ConnectionMode.isNone(normalized) ? MODE_INHERIT : normalized;
+    public void setVault(VaultConnection vault) {
+        this.vault = vault instanceof VaultNone ? new VaultInherit() : vault;
     }
 
-    public String getVaultUrl() {
-        return vaultUrl;
-    }
-
-    @DataBoundSetter
-    public void setVaultUrl(String vaultUrl) {
-        this.vaultUrl = vaultUrl == null ? "" : vaultUrl.trim();
-    }
-
-    public String getVaultAppRoleCredentialsId() {
-        return vaultAppRoleCredentialsId;
-    }
-
-    @DataBoundSetter
-    public void setVaultAppRoleCredentialsId(String vaultAppRoleCredentialsId) {
-        this.vaultAppRoleCredentialsId =
-                vaultAppRoleCredentialsId == null || vaultAppRoleCredentialsId.isBlank()
-                        ? null
-                        : vaultAppRoleCredentialsId.trim();
-    }
-
-    public String getVaultPath() {
-        return vaultPath;
-    }
-
-    @DataBoundSetter
-    public void setVaultPath(String vaultPath) {
-        this.vaultPath = vaultPath == null || vaultPath.isBlank() ? null : vaultPath.trim();
-    }
-
-    public String getVaultMount() {
-        return vaultMount;
-    }
-
-    @DataBoundSetter
-    public void setVaultMount(String vaultMount) {
-        this.vaultMount = vaultMount;
-    }
-
-    public String getVaultNamespace() {
-        return vaultNamespace;
-    }
-
-    @DataBoundSetter
-    public void setVaultNamespace(String vaultNamespace) {
-        this.vaultNamespace = vaultNamespace;
-    }
-
-    public String getVaultVersion() {
-        return vaultVersion;
-    }
-
-    @DataBoundSetter
-    public void setVaultVersion(String vaultVersion) {
-        this.vaultVersion = vaultVersion;
+    private VaultConnection vaultResolved() {
+        if (vault == null || vault instanceof VaultNone) {
+            return new VaultInherit();
+        }
+        return vault;
     }
 
     public String getPortainerConnectionMode() {
@@ -258,9 +234,7 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
         final String apiKey = auth.apiKey;
         Item item = run.getParent();
         final VaultFields vaultFields = PortainerConnections.abortOn(
-                log,
-                () -> VaultFields.parse(
-                        vaultPath, vaultMount, vaultVersion, vaultNamespace, vaultUrl, buildEnv));
+                log, () -> vaultResolved().toFields(buildEnv));
 
         // Portainer → Vault → mutate (no Git on this step)
         PortainerBuildLogger.debugPortainerStart(log, connection, endpoint, null);
@@ -315,7 +289,7 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
     }
 
     private void requireVaultConnection(PortainerBuildLogger log) throws AbortException {
-        if (ConnectionMode.isNone(getVaultConnectionMode())) {
+        if (vaultResolved().isNone()) {
             throw PortainerConnections.abort(log, "Vault connection is required for Swarm secrets.");
         }
     }
@@ -344,18 +318,19 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
             ResolvedConnection connection,
             VaultFields vaultFields,
             PortainerBuildLogger log) throws AbortException {
+        VaultConnection vaultConnection = vaultResolved();
         log.debug(PortainerBuildLogger.formatVaultConnection(
-                getVaultConnectionMode(),
+                vaultConnection.getMode(),
                 vaultFields.pathRaw,
                 vaultFields.mount,
                 vaultFields.version));
         VaultConnections.runPreflight(new VaultConnections.Request(
-                getVaultConnectionMode(),
+                vaultConnection.getMode(),
                 true,
-                vaultUrl,
-                vaultAppRoleCredentialsId,
-                vaultPath,
-                vaultNamespace,
+                vaultConnection.getVaultUrl(),
+                vaultConnection.getVaultAppRoleCredentialsId(),
+                vaultConnection.getVaultPath(),
+                vaultConnection.getVaultNamespace(),
                 run,
                 buildEnv,
                 item,
@@ -444,12 +419,13 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
             ResolvedConnection connection,
             VaultFields fields,
             PortainerBuildLogger log) throws AbortException {
+        VaultConnection vaultConnection = vaultResolved();
         return VaultKv.resolve(new VaultKv.Request(
                 new VaultKv.Request.VaultSpec(
                         VaultKv.Policy.REQUIRED,
-                        getVaultConnectionMode(),
+                        vaultConnection.getMode(),
                         fields,
-                        vaultAppRoleCredentialsId),
+                        vaultConnection.getVaultAppRoleCredentialsId()),
                 new VaultKv.Request.RunContext(run, buildEnv, item),
                 new VaultKv.Request.Timeouts(connection.connectTimeoutMs, connection.readTimeoutMs),
                 log));
@@ -519,6 +495,10 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
             return VaultPluginInherit.inheritSummary();
         }
 
+        public List<Descriptor<VaultConnection>> getVaultDescriptors() {
+            return VaultConnection.descriptors(false);
+        }
+
         @POST
         public FormValidation doCheckEndpointId(
                 @QueryParameter String value,
@@ -552,63 +532,9 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
         }
 
         @POST
-        public FormValidation doCheckVaultUrl(
-                @QueryParameter String value,
-                @QueryParameter String vaultConnectionMode,
-                @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            if (!ConnectionMode.isManual(vaultConnectionMode)) {
-                return FormValidation.ok();
-            }
-            if (value == null || value.isBlank()) {
-                return FormValidation.ok();
-            }
-            try {
-                VaultUrl.normalizeBaseUrlSyntaxOnly(value);
-                return FormValidation.ok();
-            } catch (IllegalArgumentException e) {
-                return FormValidation.error(e.getMessage());
-            }
-        }
-
-        @POST
-        public FormValidation doCheckVaultPath(@QueryParameter String value, @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            if (value == null || value.isBlank()) {
-                return FormValidation.ok();
-            }
-            try {
-                VaultClient.normalizeSecretPath(value);
-                return FormValidation.ok();
-            } catch (IllegalArgumentException e) {
-                return FormValidation.error(e.getMessage());
-            }
-        }
-
-        @POST
-        public FormValidation doCheckVaultMount(@QueryParameter String value, @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            if (value == null || value.isBlank()) {
-                return FormValidation.ok();
-            }
-            try {
-                VaultClient.normalizeMount(value);
-                return FormValidation.ok();
-            } catch (IllegalArgumentException e) {
-                return FormValidation.error(e.getMessage());
-            }
-        }
-
-        @POST
         public ListBoxModel doFillPortainerCredentialsIdItems(
                 @AncestorInPath Item item, @QueryParameter String portainerCredentialsId) {
             return PortainerCredentials.fillSecretText(item, portainerCredentialsId);
-        }
-
-        @POST
-        public ListBoxModel doFillVaultAppRoleCredentialsIdItems(
-                @AncestorInPath Item item, @QueryParameter String vaultAppRoleCredentialsId) {
-            return PortainerCredentials.fillVaultAppRoleCredentials(item, vaultAppRoleCredentialsId);
         }
     }
 }

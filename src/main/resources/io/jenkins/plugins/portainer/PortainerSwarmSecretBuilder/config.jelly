@@ -5,36 +5,8 @@
     <f:entry title="${%Endpoint ID}" field="endpointId">
       <f:textbox/>
     </f:entry>
-    <f:entry title="${%Vault}" help="${descriptor.getHelpFile('vaultConnectionMode')}"/>
-    <j:set var="help" value="${null}"/>
-    <f:radioBlock inline="true" name="vaultConnectionMode" value="inherit" title="${%Inherit from System}"
-                  checked="${instance == null || instance.vaultConnectionMode != 'manual'}">
-      <f:entry>
-        <f:description>${descriptor.vaultInheritSummary}</f:description>
-      </f:entry>
-    </f:radioBlock>
-    <f:radioBlock inline="true" name="vaultConnectionMode" value="manual" title="${%Manual}"
-                  checked="${instance != null &amp;&amp; instance.vaultConnectionMode == 'manual'}">
-      <f:entry title="${%Vault URL}" field="vaultUrl">
-        <f:textbox/>
-      </f:entry>
-      <f:entry title="${%Vault AppRole credentials}" field="vaultAppRoleCredentialsId">
-        <c:select/>
-      </f:entry>
-    </f:radioBlock>
-    <!-- One name per field: inline radioBlocks would otherwise submit duplicate keys as JSON arrays. -->
-    <f:entry title="${%Vault KV mount}" field="vaultMount">
-      <f:textbox default="secret"/>
-    </f:entry>
-    <f:entry title="${%Vault path}" field="vaultPath">
-      <f:textbox/>
-    </f:entry>
-    <f:entry title="${%Vault namespace Enterprise}" field="vaultNamespace">
-      <f:textbox/>
-    </f:entry>
-    <f:entry title="${%Vault secret version}" field="vaultVersion">
-      <f:textbox/>
-    </f:entry>
+    <f:dropdownDescriptorSelector field="vault" title="${%Vault}"
+                                  descriptors="${descriptor.vaultDescriptors}"/>
     <f:entry title="${%Secret keys}" field="secretKeys">
       <f:textarea/>
     </f:entry>

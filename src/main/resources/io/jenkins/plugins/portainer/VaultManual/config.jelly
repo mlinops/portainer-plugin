@@ -1,0 +1,21 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form" xmlns:c="/lib/credentials">
+  <f:entry title="${%Vault URL}" field="vaultUrl">
+    <f:textbox/>
+  </f:entry>
+  <f:entry title="${%Vault AppRole credentials}" field="vaultAppRoleCredentialsId">
+    <c:select/>
+  </f:entry>
+  <f:entry title="${%Vault KV mount}" field="vaultMount">
+    <f:textbox default="secret"/>
+  </f:entry>
+  <f:entry title="${%Vault path}" field="vaultPath">
+    <f:textbox/>
+  </f:entry>
+  <f:entry title="${%Vault namespace Enterprise}" field="vaultNamespace">
+    <f:textbox/>
+  </f:entry>
+  <f:entry title="${%Vault secret version}" field="vaultVersion">
+    <f:textbox/>
+  </f:entry>
+</j:jelly>

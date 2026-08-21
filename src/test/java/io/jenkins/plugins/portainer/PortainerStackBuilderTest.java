@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -254,11 +255,11 @@ public class PortainerStackBuilderTest {
     }
 
     /**
-     * Freestyle {@code f:radioBlock inline="true"} binds mode strings and sibling fields at the
-     * top level (no nested {@code {"value":…}} object).
+     * Freestyle {@code f:radioBlock inline="true"} binds Portainer mode strings at the top level.
+     * Vault is a nested {@link VaultConnection} ({@code f:dropdownDescriptorSelector}).
      */
     @Test
-    public void stapler_inlineRadio_bindsInheritAndManualFields(JenkinsRule jenkins) throws Exception {
+    public void stapler_bindsVaultManualNested(JenkinsRule jenkins) throws Exception {
         PortainerStackBuilder step = jenkins.executeOnServer(() -> {
             JSONObject json = new JSONObject();
             json.put("stapler-class", PortainerStackBuilder.class.getName());
@@ -271,16 +272,10 @@ public class PortainerStackBuilderTest {
             json.put("gitCredentialsId", "gitlab_api_token");
             json.put("repositoryReferenceName", "refs/heads/main");
             json.put("env", "TEST_ENV=1");
-            json.put("vaultPath", "basic");
-            json.put("vaultMount", "applications");
-            json.put("vaultNamespace", "");
-            json.put("vaultVersion", "");
             json.put("prune", false);
             json.put("repullImageAndRedeploy", true);
             json.put("portainerConnectionMode", "inherit");
-            json.put("vaultConnectionMode", "manual");
-            json.put("vaultUrl", "https://vault.example:8200");
-            json.put("vaultAppRoleCredentialsId", "jenkins-portainer-simple");
+            json.put("vault", vaultJson(VaultManual.class, "https://vault.example:8200", "jenkins-portainer-simple", "basic", "applications"));
 
             PortainerStackBuilder.DescriptorImpl d =
                     jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
@@ -288,13 +283,13 @@ public class PortainerStackBuilderTest {
         });
 
         assertEquals(PortainerStackBuilder.MODE_INHERIT, step.getPortainerConnectionMode());
-        assertEquals(PortainerStackBuilder.MODE_MANUAL, step.getVaultConnectionMode());
-        assertEquals("https://vault.example:8200", step.getVaultUrl());
-        assertEquals("jenkins-portainer-simple", step.getVaultAppRoleCredentialsId());
+        assertInstanceOf(VaultManual.class, step.getVault());
+        assertEquals("https://vault.example:8200", step.getVault().getVaultUrl());
+        assertEquals("jenkins-portainer-simple", step.getVault().getVaultAppRoleCredentialsId());
         assertEquals("245", step.getEndpointId());
         assertEquals("test-nginx", step.getStackName());
-        assertEquals("basic", step.getVaultPath());
-        assertEquals("applications", step.getVaultMount());
+        assertEquals("basic", step.getVault().getVaultPath());
+        assertEquals("applications", step.getVault().getVaultMount());
     }
 
     @Test
@@ -308,7 +303,7 @@ public class PortainerStackBuilderTest {
             json.put("portainerConnectionMode", "manual");
             json.put("portainerUrl", "https://portainer.example:9443");
             json.put("portainerCredentialsId", "portainer-api-key");
-            json.put("vaultConnectionMode", "inherit");
+            json.put("vault", vaultJson(VaultInherit.class, null, null, null, null));
 
             PortainerStackBuilder.DescriptorImpl d =
                     jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
@@ -318,11 +313,11 @@ public class PortainerStackBuilderTest {
         assertEquals(PortainerStackBuilder.MODE_MANUAL, step.getPortainerConnectionMode());
         assertEquals("https://portainer.example:9443", step.getPortainerUrl());
         assertEquals("portainer-api-key", step.getPortainerCredentialsId());
-        assertEquals(PortainerStackBuilder.MODE_INHERIT, step.getVaultConnectionMode());
+        assertInstanceOf(VaultInherit.class, step.getVault());
     }
 
     @Test
-    public void stapler_inlineRadio_bindsVaultNone(JenkinsRule jenkins) throws Exception {
+    public void stapler_bindsVaultNone(JenkinsRule jenkins) throws Exception {
         PortainerStackBuilder step = jenkins.executeOnServer(() -> {
             JSONObject json = new JSONObject();
             json.put("endpointId", "1");
@@ -330,14 +325,14 @@ public class PortainerStackBuilderTest {
             json.put("stackName", "demo");
             json.put("repositoryUrl", "https://gitlab.example/group/stack.git");
             json.put("portainerConnectionMode", "inherit");
-            json.put("vaultConnectionMode", "none");
+            json.put("vault", vaultJson(VaultNone.class, null, null, null, null));
 
             PortainerStackBuilder.DescriptorImpl d =
                     jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
             return (PortainerStackBuilder) d.newInstance(Stapler.getCurrentRequest2(), json);
         });
 
-        assertEquals(PortainerStackBuilder.MODE_NONE, step.getVaultConnectionMode());
+        assertInstanceOf(VaultNone.class, step.getVault());
         assertEquals(PortainerStackBuilder.MODE_INHERIT, step.getPortainerConnectionMode());
     }
 
@@ -348,15 +343,13 @@ public class PortainerStackBuilderTest {
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultConnectionMode(PortainerStackBuilder.MODE_NONE);
-        step.setVaultPath("myapp/prod");
-        step.setVaultUrl("https://vault.example:8200");
+        step.setVault(new VaultNone());
         step.setEnv("IMAGE_TAG=1");
         project.getBuildersList().add(step);
 
         jenkins.configRoundtrip(project);
         PortainerStackBuilder loaded = project.getBuildersList().get(PortainerStackBuilder.class);
-        assertEquals(PortainerStackBuilder.MODE_NONE, loaded.getVaultConnectionMode());
+        assertInstanceOf(VaultNone.class, loaded.getVault());
 
         FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
         jenkins.assertLogNotContains("Preflight check of Vault", build);
@@ -468,7 +461,6 @@ public class PortainerStackBuilderTest {
             json.put("stackType", "compose");
             json.put("stackName", "demo");
             json.put("portainerConnectionMode", "inherit");
-            json.put("vaultConnectionMode", "inherit");
             json.put("stackSource", "yaml");
             json.put("stackFileContent", "services:\n  web:\n    image: nginx:alpine\n");
 
@@ -811,20 +803,15 @@ public class PortainerStackBuilderTest {
             FreeStyleProject project = jenkins.createFreeStyleProject();
             PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
             step.setEnv("FEATURE_FLAG=true");
-            // Explicit Manual (also migrated when vaultUrl+cred set without mode).
-            step.setVaultConnectionMode(PortainerStackBuilder.MODE_MANUAL);
-            step.setVaultUrl(vaultBase);
-            step.setVaultAppRoleCredentialsId("vault-approle");
-            step.setVaultPath("myapp/prod");
-            step.setVaultMount("secret");
+            step.setVault(vaultManual(vaultBase, "vault-approle", "myapp/prod"));
             project.getBuildersList().add(step);
 
             jenkins.configRoundtrip(project);
             PortainerStackBuilder loaded = project.getBuildersList().get(PortainerStackBuilder.class);
-            assertEquals("vault-approle", loaded.getVaultAppRoleCredentialsId());
-            assertEquals(vaultBase, loaded.getVaultUrl());
-            assertEquals("myapp/prod", loaded.getVaultPath());
-            assertEquals(PortainerStackBuilder.MODE_MANUAL, loaded.getVaultConnectionMode());
+            assertEquals("vault-approle", loaded.getVault().getVaultAppRoleCredentialsId());
+            assertEquals(vaultBase, loaded.getVault().getVaultUrl());
+            assertEquals("myapp/prod", loaded.getVault().getVaultPath());
+            assertInstanceOf(VaultManual.class, loaded.getVault());
 
             FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
             jenkins.assertLogNotContains("role-id-SHOULD-NOT-LOG", build);
@@ -871,11 +858,7 @@ public class PortainerStackBuilderTest {
 
             FreeStyleProject project = jenkins.createFreeStyleProject();
             PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-            step.setVaultConnectionMode(PortainerStackBuilder.MODE_MANUAL);
-            step.setVaultUrl(vaultBase);
-            step.setVaultAppRoleCredentialsId("vault-approle-revoke");
-            step.setVaultPath("myapp/prod");
-            step.setVaultMount("secret");
+            step.setVault(vaultManual(vaultBase, "vault-approle-revoke", "myapp/prod"));
             step.setVerboseLogging(true);
             project.getBuildersList().add(step);
 
@@ -926,9 +909,7 @@ public class PortainerStackBuilderTest {
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultConnectionMode(PortainerStackBuilder.MODE_INHERIT);
-        step.setVaultPath("myapp/prod");
-        step.setVaultMount("secret");
+        step.setVault(vaultInherit("myapp/prod"));
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
@@ -944,9 +925,9 @@ public class PortainerStackBuilderTest {
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        step.setVaultConnectionMode(PortainerStackBuilder.MODE_MANUAL);
-        step.setVaultUrl("https://vault.example:8200");
-        step.setVaultPath("myapp/prod");
+        VaultManual partial = new VaultManual("https://vault.example:8200", null);
+        partial.setVaultPath("myapp/prod");
+        step.setVault(partial);
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
@@ -962,8 +943,7 @@ public class PortainerStackBuilderTest {
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerStackBuilder step = repoStack("1", "compose", "demo", "https://gitlab.example/group/stack.git");
-        // Legacy-style: URL without path → Manual migration + partial fail (path required).
-        step.setVaultUrl("https://vault.example:8200");
+        step.setVault(new VaultManual("https://vault.example:8200", null));
         project.getBuildersList().add(step);
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
@@ -982,7 +962,8 @@ public class PortainerStackBuilderTest {
         assertEquals("Vault Plugin is not configured.", vaultSummary);
         assertEquals(vaultSummary, VaultPluginInherit.inheritSummary());
         assertFalse(d.isVaultInheritReady());
-        assertEquals("Vault disabled.", PortainerStackBuilder.DescriptorImpl.VAULT_NONE_SUMMARY);
+        assertEquals("Vault disabled.", VaultNone.SUMMARY);
+        assertTrue(d.getVaultDescriptors().stream().anyMatch(x -> x instanceof VaultNone.DescriptorImpl));
     }
 
     private void configurePortainer(JenkinsRule jenkins, String name) throws Exception {
@@ -1008,6 +989,44 @@ public class PortainerStackBuilderTest {
         PortainerStackBuilder step = new PortainerStackBuilder(endpointId, stackType, stackName);
         step.setRepositoryUrl(repositoryUrl);
         return step;
+    }
+
+    private static VaultInherit vaultInherit(String path) {
+        VaultInherit inherit = new VaultInherit();
+        inherit.setVaultPath(path);
+        inherit.setVaultMount("secret");
+        return inherit;
+    }
+
+    private static VaultManual vaultManual(String url, String credentialsId, String path) {
+        VaultManual manual = new VaultManual(url, credentialsId);
+        manual.setVaultPath(path);
+        manual.setVaultMount("secret");
+        return manual;
+    }
+
+    private static JSONObject vaultJson(
+            Class<? extends VaultConnection> type,
+            String url,
+            String credentialsId,
+            String path,
+            String mount) {
+        JSONObject vault = new JSONObject();
+        vault.put("stapler-class", type.getName());
+        vault.put("$class", type.getName());
+        if (url != null) {
+            vault.put("vaultUrl", url);
+        }
+        if (credentialsId != null) {
+            vault.put("vaultAppRoleCredentialsId", credentialsId);
+        }
+        if (path != null) {
+            vault.put("vaultPath", path);
+        }
+        if (mount != null) {
+            vault.put("vaultMount", mount);
+        }
+        return vault;
     }
 
     /** True when path/method is a stack create, git redeploy, or YAML PUT update. */

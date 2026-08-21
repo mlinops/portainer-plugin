@@ -33,7 +33,7 @@ FEATURE_FLAG=true</env>
       <portainerConnectionMode>manual</portainerConnectionMode>
       <portainerUrl>https://portainer.example</portainerUrl>
       <portainerCredentialsId>portainer-api-example</portainerCredentialsId>
-      <vaultConnectionMode>none</vaultConnectionMode>
+      <vault class="io.jenkins.plugins.portainer.VaultNone"/>
       <verboseLogging>false</verboseLogging>
       <validateOnly>true</validateOnly>
     </io.jenkins.plugins.portainer.PortainerStackBuilder>

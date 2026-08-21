@@ -117,7 +117,6 @@ public class PortainerSwarmSecretBuilderTest {
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
         applyManualVault(step);
-        step.setVaultPath("applications/example/systems/rabbitmq");
         step.setSecretKeys("rabbitmq_signing_key");
         project.getBuildersList().add(step);
 
@@ -139,7 +138,6 @@ public class PortainerSwarmSecretBuilderTest {
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
         applyManualVault(step);
-        step.setVaultPath("applications/example/systems/rabbitmq");
         step.setSecretKeys("rabbitmq_signing_key");
         project.getBuildersList().add(step);
 
@@ -157,7 +155,6 @@ public class PortainerSwarmSecretBuilderTest {
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
         applyManualVault(step);
-        step.setVaultPath("applications/example/systems/rabbitmq");
         step.setSecretKeys("rabbitmq_signing_key");
         step.setValidateOnly(true);
         project.getBuildersList().add(step);
@@ -179,7 +176,6 @@ public class PortainerSwarmSecretBuilderTest {
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerSwarmSecretBuilder step = new PortainerSwarmSecretBuilder("1");
         applyManualVault(step);
-        step.setVaultPath("applications/example/systems/rabbitmq");
         step.setSecretKeys("rabbitmq_signing_key");
         project.getBuildersList().add(step);
 
@@ -239,6 +235,7 @@ public class PortainerSwarmSecretBuilderTest {
         assertTrue(d.isVaultPluginPresent());
         assertFalse(d.isVaultInheritReady());
         assertEquals("Vault Plugin is not configured.", d.getVaultInheritSummary());
+        assertFalse(d.getVaultDescriptors().stream().anyMatch(x -> x instanceof VaultNone.DescriptorImpl));
     }
 
     private void startVaultServer() throws IOException {
@@ -258,17 +255,18 @@ public class PortainerSwarmSecretBuilderTest {
     }
 
     private void applyManualVault(PortainerSwarmSecretBuilder step) {
-        step.setVaultConnectionMode(PortainerSwarmSecretBuilder.MODE_MANUAL);
-        step.setVaultUrl(vaultBase);
-        step.setVaultAppRoleCredentialsId("vault-approle");
+        VaultManual manual = new VaultManual(vaultBase, "vault-approle");
+        manual.setVaultPath("applications/example/systems/rabbitmq");
+        step.setVault(manual);
     }
 
     private String pipelineSecretArgs(boolean validateOnly) {
         return "    endpointId: '1',\n"
-                + "    vaultConnectionMode: 'manual',\n"
-                + "    vaultUrl: '" + vaultBase + "',\n"
-                + "    vaultAppRoleCredentialsId: 'vault-approle',\n"
-                + "    vaultPath: 'applications/example/systems/rabbitmq',\n"
+                + "    vault: vaultManual(\n"
+                + "      vaultUrl: '" + vaultBase + "',\n"
+                + "      vaultAppRoleCredentialsId: 'vault-approle',\n"
+                + "      vaultPath: 'applications/example/systems/rabbitmq'\n"
+                + "    ),\n"
                 + "    secretKeys: 'rabbitmq_signing_key'"
                 + (validateOnly ? ",\n    validateOnly: true\n" : "\n");
     }
