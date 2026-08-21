@@ -16,7 +16,6 @@ import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
-import jenkins.tasks.SimpleBuildStep;
 import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
@@ -38,7 +37,7 @@ import java.util.logging.Logger;
  * Freestyle / Pipeline step: ensure Docker Swarm secrets from Vault KV v2
  * ({@code @Symbol("portainerStackSecret")}; alias {@code portainerSwarmSecret}).
  */
-public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildStep {
+public class PortainerSwarmSecretBuilder extends AbstractVaultStep {
 
     private static final Logger LOGGER = Logger.getLogger(PortainerSwarmSecretBuilder.class.getName());
 
@@ -53,15 +52,6 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
      */
     @SuppressWarnings("lgtm[jenkins/plaintext-storage]")
     private String secretKeys = "";
-    private VaultConnection vault;
-    /** Former persisted field; migrated in {@link #readResolve()}. */
-    private String vaultConnectionMode;
-    private String vaultUrl;
-    private String vaultAppRoleCredentialsId;
-    private String vaultPath;
-    private String vaultMount;
-    private String vaultNamespace;
-    private String vaultVersion;
 
     private String portainerConnectionMode;
     private String portainerUrl;
@@ -76,28 +66,7 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
     }
 
     private Object readResolve() {
-        if (vault == null) {
-            vault = VaultConnection.fromLegacy(
-                    vaultConnectionMode,
-                    vaultUrl,
-                    vaultAppRoleCredentialsId,
-                    vaultPath,
-                    vaultMount,
-                    vaultNamespace,
-                    vaultVersion,
-                    true);
-        }
-        if (vault instanceof VaultNone) {
-            vault = new VaultInherit();
-        }
-        vaultConnectionMode = null;
-        vaultUrl = null;
-        vaultAppRoleCredentialsId = null;
-        vaultPath = null;
-        vaultMount = null;
-        vaultNamespace = null;
-        vaultVersion = null;
-        return this;
+        return readResolveVault(true);
     }
 
     public String getEndpointId() {
@@ -220,7 +189,6 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
                 log, () -> PortainerConnections.resolveEndpointId(endpointId, buildEnv));
         final List<String> keys = PortainerConnections.abortOn(
                 log, () -> SwarmConfigNaming.parseSecretKeys(secretKeys));
-        requireVaultConnection(log);
 
         PortainerGlobalConfiguration cfg = PortainerGlobalConfiguration.get();
         final PortainerConnections.Authenticated auth = PortainerConnections.resolveAuthenticated(
@@ -285,12 +253,6 @@ public class PortainerSwarmSecretBuilder extends Builder implements SimpleBuildS
             }
 
             summarize(log, startedNs, files.size(), outcome.created, outcome.skipped);
-        }
-    }
-
-    private void requireVaultConnection(PortainerBuildLogger log) throws AbortException {
-        if (vaultResolved().isNone()) {
-            throw PortainerConnections.abort(log, "Vault connection is required for Swarm secrets.");
         }
     }
 

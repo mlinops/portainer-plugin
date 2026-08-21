@@ -1,0 +1,9 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<io.jenkins.plugins.portainer.PortainerStackBuilder>
+  <endpointId>1</endpointId>
+  <stackType>compose</stackType>
+  <stackName>demo</stackName>
+  <repositoryUrl>https://gitlab.example/group/stack.git</repositoryUrl>
+  <vaultConnectionMode>none</vaultConnectionMode>
+  <vaultPath>apps/demo</vaultPath>
+</io.jenkins.plugins.portainer.PortainerStackBuilder>

@@ -1,9 +1,13 @@
 package io.jenkins.plugins.portainer;
 
 import hudson.model.Descriptor;
+import hudson.model.Item;
 import hudson.util.FormValidation;
 import jenkins.model.Jenkins;
+import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundSetter;
+import org.kohsuke.stapler.QueryParameter;
+import org.kohsuke.stapler.verb.POST;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -66,84 +70,74 @@ public abstract class VaultConnection extends hudson.model.AbstractDescribableIm
     }
 
     /**
+     * Former persisted {@code vaultConnectionMode} siblings on Stack/Secret (XStream leftover).
+     */
+    record Leftover(
+            String mode,
+            String url,
+            String credentialsId,
+            String path,
+            String mount,
+            String namespace,
+            String version) {}
+
+    /**
+     * XStream leftover fields on Stack/Secret. When {@code vault} is already nested, it is kept
+     * (Secret still replaces {@link VaultNone}). Leftover strings are not cleared here.
+     */
+    static VaultConnection migrate(VaultConnection vault, Leftover leftover, boolean secretStep) {
+        VaultConnection resolved = vault;
+        if (resolved == null) {
+            resolved = fromLegacy(leftover, secretStep);
+        }
+        if (secretStep && resolved instanceof VaultNone) {
+            return new VaultInherit();
+        }
+        return resolved;
+    }
+
+    /**
      * Former persisted Stack/Secret fields ({@code vaultConnectionMode} + siblings).
      * Stack default is none; Secret maps explicit none to inherit.
      */
-    static VaultConnection fromLegacy(
-            String mode,
-            String vaultUrl,
-            String vaultAppRoleCredentialsId,
-            String vaultPath,
-            String vaultMount,
-            String vaultNamespace,
-            String vaultVersion,
-            boolean secretStep) {
-        String normalized = blankToNull(mode);
+    static VaultConnection fromLegacy(Leftover leftover, boolean secretStep) {
+        String normalized = blankToNull(leftover.mode());
         if (normalized != null) {
             String resolved = ConnectionMode.normalize(
                     normalized, secretStep ? ConnectionMode.INHERIT : ConnectionMode.NONE);
             if (secretStep && ConnectionMode.isNone(resolved)) {
                 resolved = ConnectionMode.INHERIT;
             }
-            return fromMode(
-                    resolved,
-                    vaultUrl,
-                    vaultAppRoleCredentialsId,
-                    vaultPath,
-                    vaultMount,
-                    vaultNamespace,
-                    vaultVersion);
+            return fromMode(resolved, leftover);
         }
-        if (nonBlank(vaultUrl) || nonBlank(vaultAppRoleCredentialsId)) {
-            return fromMode(
-                    ConnectionMode.MANUAL,
-                    vaultUrl,
-                    vaultAppRoleCredentialsId,
-                    vaultPath,
-                    vaultMount,
-                    vaultNamespace,
-                    vaultVersion);
+        if (nonBlank(leftover.url()) || nonBlank(leftover.credentialsId())) {
+            return fromMode(ConnectionMode.MANUAL, leftover);
         }
-        if (nonBlank(vaultPath)) {
-            return fromMode(
-                    ConnectionMode.INHERIT,
-                    vaultUrl,
-                    vaultAppRoleCredentialsId,
-                    vaultPath,
-                    vaultMount,
-                    vaultNamespace,
-                    vaultVersion);
+        if (nonBlank(leftover.path())) {
+            return fromMode(ConnectionMode.INHERIT, leftover);
         }
         return secretStep ? new VaultInherit() : new VaultNone();
     }
 
-    private static VaultConnection fromMode(
-            String mode,
-            String vaultUrl,
-            String vaultAppRoleCredentialsId,
-            String vaultPath,
-            String vaultMount,
-            String vaultNamespace,
-            String vaultVersion) {
+    private static VaultConnection fromMode(String mode, Leftover leftover) {
         if (ConnectionMode.isNone(mode)) {
             return new VaultNone();
         }
         if (ConnectionMode.isManual(mode)) {
-            VaultManual manual = new VaultManual(vaultUrl, vaultAppRoleCredentialsId);
-            applyKv(manual, vaultPath, vaultMount, vaultNamespace, vaultVersion);
+            VaultManual manual = new VaultManual(leftover.url(), leftover.credentialsId());
+            applyKv(manual, leftover);
             return manual;
         }
         VaultInherit inherit = new VaultInherit();
-        applyKv(inherit, vaultPath, vaultMount, vaultNamespace, vaultVersion);
+        applyKv(inherit, leftover);
         return inherit;
     }
 
-    private static void applyKv(
-            Kv kv, String path, String mount, String namespace, String version) {
-        kv.setVaultPath(path);
-        kv.setVaultMount(mount);
-        kv.setVaultNamespace(namespace);
-        kv.setVaultVersion(version);
+    private static void applyKv(Kv kv, Leftover leftover) {
+        kv.setVaultPath(leftover.path());
+        kv.setVaultMount(leftover.mount());
+        kv.setVaultNamespace(leftover.namespace());
+        kv.setVaultVersion(leftover.version());
     }
 
     static FormValidation checkUrl(String value) {
@@ -247,6 +241,31 @@ public abstract class VaultConnection extends hudson.model.AbstractDescribableIm
         @DataBoundSetter
         public void setVaultVersion(String vaultVersion) {
             this.vaultVersion = blankToNull(vaultVersion);
+        }
+    }
+
+    /**
+     * Form checks for Inherit / Manual KV fields. Stapler binds {@code doCheck*} from this type
+     * on subclass descriptors.
+     */
+    public abstract static class KvDescriptor extends Descriptor<VaultConnection> {
+
+        @POST
+        public FormValidation doCheckVaultPath(@QueryParameter String value, @AncestorInPath Item item) {
+            PortainerConnections.checkConfigure(item);
+            return checkPath(value);
+        }
+
+        @POST
+        public FormValidation doCheckVaultMount(@QueryParameter String value, @AncestorInPath Item item) {
+            PortainerConnections.checkConfigure(item);
+            return checkMount(value);
+        }
+
+        @POST
+        public FormValidation doCheckVaultVersion(@QueryParameter String value, @AncestorInPath Item item) {
+            PortainerConnections.checkConfigure(item);
+            return checkVersion(value);
         }
     }
 }

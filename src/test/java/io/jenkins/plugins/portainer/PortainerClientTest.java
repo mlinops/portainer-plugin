@@ -512,6 +512,23 @@ public class PortainerClientTest {
     }
 
     @Test
+    public void parseStackEnv_readsPairsAndSkipsNonObjects() throws Exception {
+        List<PortainerClient.EnvPair> env = PortainerClient.parseStackEnv(MAPPER.readTree(
+                "{\"Env\":["
+                        + "{\"name\":\"A\",\"value\":\"1\"},"
+                        + "null,"
+                        + "\"x\","
+                        + "{\"Name\":\"B\",\"Value\":\"2\"},"
+                        + "{\"name\":\"\"}"
+                        + "]}"));
+        assertEquals(2, env.size());
+        assertEquals("A", env.get(0).name);
+        assertEquals("1", env.get(0).value);
+        assertEquals("B", env.get(1).name);
+        assertEquals("2", env.get(1).value);
+    }
+
+    @Test
     public void createKubernetesStackFromString_sendsStackNameWithoutNamespace() throws Exception {
         try (PortainerClient client = new PortainerClient(2000, 2000)) {
         PortainerClient.KubernetesFromStringRequest req =

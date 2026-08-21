@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-public class GitRepositoryFilesTest {
+class GitRepositoryFilesTest {
 
     private static final String LOOPBACK_REPO = "http://127.0.0.1/values.git";
     private static final String LOOPBACK_CONFIGS = "http://127.0.0.1/configs.git";
@@ -33,7 +33,7 @@ public class GitRepositoryFilesTest {
     Path tempDir;
 
     @AfterEach
-    public void clearLoopback() {
+    void clearLoopback() {
         System.clearProperty(ConnectionTester.ALLOW_LOOPBACK_FOR_TESTS_PROP);
     }
 
@@ -43,6 +43,15 @@ public class GitRepositoryFilesTest {
             Launcher launcher,
             TaskListener listener) {
         return new GitRepositoryFiles.CloneContext(auth, workspace, launcher, listener);
+    }
+
+    private static GitRepositoryFiles.CloneContext noWorkspaceCtx() {
+        return cloneCtx(null, null, null, null);
+    }
+
+    private static void assertHostRejectMessage(IllegalArgumentException ex) {
+        String msg = ex.getMessage().toLowerCase();
+        assertTrue(msg.contains("not allowed") || msg.contains("resolv"), msg);
     }
 
     /** Fake {@code git} via {@link Launcher}: no real process, optional checkout seeding. */
@@ -125,7 +134,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void shortRefForClone_stripsRefsPrefix() {
+    void shortRefForClone_stripsRefsPrefix() {
         assertEquals("main", GitRepositoryFiles.shortRefForClone("refs/heads/main"));
         assertEquals("v1.2.3", GitRepositoryFiles.shortRefForClone("refs/tags/v1.2.3"));
         assertEquals("feature/x", GitRepositoryFiles.shortRefForClone("feature/x"));
@@ -134,7 +143,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void defaultGitReference_blankUsesStackDefault() {
+    void defaultGitReference_blankUsesStackDefault() {
         assertEquals(
                 PortainerStackBuilder.DEFAULT_REPOSITORY_REFERENCE,
                 GitRepositoryFiles.defaultGitReference(null));
@@ -145,7 +154,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void requireCloneContext_rejectsNullWorkspaceOrLauncher() {
+    void requireCloneContext_rejectsNullWorkspaceOrLauncher() {
         IOException ws = assertThrows(
                 IOException.class,
                 () -> GitRepositoryFiles.requireCloneContext(null, null, "Helm values"));
@@ -161,7 +170,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void requireConfigDirectory_rejectsMissingAndNonDirectory() throws Exception {
+    void requireConfigDirectory_rejectsMissingAndNonDirectory() throws Exception {
         FilePath root = new FilePath(tempDir.toFile());
         FilePath missing = root.child("nope");
         IOException notFound = assertThrows(
@@ -182,7 +191,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void listMatchingConfigFiles_skipsDotfilesAndSorts() throws Exception {
+    void listMatchingConfigFiles_skipsDotfilesAndSorts() throws Exception {
         FilePath root = new FilePath(tempDir.toFile());
         root.child("b.json").write("{\"b\":1}", StandardCharsets.UTF_8.name());
         root.child("a.json").write("{\"a\":1}", StandardCharsets.UTF_8.name());
@@ -199,7 +208,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void toConfigFile_skipsNullDirectoryAndDotfile() throws Exception {
+    void toConfigFile_skipsNullDirectoryAndDotfile() throws Exception {
         FilePath root = new FilePath(tempDir.toFile());
         assertNull(GitRepositoryFiles.toConfigFile(root, null));
 
@@ -219,7 +228,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void toConfigFile_nestedRelativePath() throws Exception {
+    void toConfigFile_nestedRelativePath() throws Exception {
         FilePath root = new FilePath(tempDir.resolve("cfg-root").toFile());
         root.mkdirs();
         FilePath nested = root.child("sub").child("nested.json");
@@ -231,14 +240,14 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void toConfigFile_samePathAsRoot_returnsNull() throws Exception {
+    void toConfigFile_samePathAsRoot_returnsNull() throws Exception {
         FilePath file = new FilePath(tempDir.resolve("same.json").toFile());
         file.write("{}", StandardCharsets.UTF_8.name());
         assertNull(GitRepositoryFiles.toConfigFile(file, file));
     }
 
     @Test
-    public void deleteTempQuietly_removesDirectory() throws Exception {
+    void deleteTempQuietly_removesDirectory() throws Exception {
         FilePath tmp = new FilePath(tempDir.resolve("to-delete").toFile());
         tmp.mkdirs();
         tmp.child("f.txt").write("x", StandardCharsets.UTF_8.name());
@@ -248,7 +257,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void writeAskpass_writesSidecars() throws Exception {
+    void writeAskpass_writesSidecars() throws Exception {
         FilePath tmp = new FilePath(tempDir.toFile());
         PortainerCredentials.GitAuth auth = new PortainerCredentials.GitAuth("user", "pass");
         FilePath askpass = GitRepositoryFiles.writeAskpass(tmp, auth, true);
@@ -261,7 +270,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void writeAskpass_windowsBatAndNullCredentialFields() throws Exception {
+    void writeAskpass_windowsBatAndNullCredentialFields() throws Exception {
         FilePath tmp = new FilePath(tempDir.resolve("askpass-win").toFile());
         tmp.mkdirs();
         PortainerCredentials.GitAuth auth = new PortainerCredentials.GitAuth(null, null);
@@ -273,7 +282,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void cloneCommandLine_usesRepoUrlWithoutUserinfo() {
+    void cloneCommandLine_usesRepoUrlWithoutUserinfo() {
         String repo = "https://gitlab.example/group/values.git";
         String password = "s3cret:token";
         List<String> cmd = GitRepositoryFiles.cloneCommandLine(repo, "refs/heads/main");
@@ -288,7 +297,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void cloneEnv_setsAskpassWithoutEmbeddingSecrets() {
+    void cloneEnv_setsAskpassWithoutEmbeddingSecrets() {
         Map<String, String> withAuth = GitRepositoryFiles.cloneEnv("/tmp/askpass.sh");
         assertEquals("/tmp/askpass.sh", withAuth.get("GIT_ASKPASS"));
         assertEquals("0", withAuth.get("GIT_TERMINAL_PROMPT"));
@@ -301,7 +310,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void cloneEnv_blankAskpassOmitsGitAskpass() {
+    void cloneEnv_blankAskpassOmitsGitAskpass() {
         Map<String, String> blank = GitRepositoryFiles.cloneEnv("   ");
         assertFalse(blank.containsKey("GIT_ASKPASS"));
         assertEquals("0", blank.get("GIT_TERMINAL_PROMPT"));
@@ -309,7 +318,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void askpassScriptContent_hasNoEmbeddedCredentials() {
+    void askpassScriptContent_hasNoEmbeddedCredentials() {
         String unix = GitRepositoryFiles.askpassScriptContent(true);
         String win = GitRepositoryFiles.askpassScriptContent(false);
         assertTrue(unix.startsWith("#!/bin/sh"));
@@ -324,7 +333,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void scrubSecrets_redactsUserinfoAndPassword() {
+    void scrubSecrets_redactsUserinfoAndPassword() {
         PortainerCredentials.GitAuth auth = new PortainerCredentials.GitAuth("oauth2", "s3cret:token");
         String raw = "fatal: https://oauth2:s3cret%3Atoken@gitlab.example/group/values.git/info/refs not found";
         String scrubbed = GitRepositoryFiles.scrubSecrets(raw, auth);
@@ -333,7 +342,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void scrubSecrets_nullEmptyAuthAndEncodePaths() {
+    void scrubSecrets_nullEmptyAuthAndEncodePaths() {
         assertEquals("", GitRepositoryFiles.scrubSecrets(null, null));
         assertEquals("", GitRepositoryFiles.scrubSecrets("", null));
         assertEquals("plain", GitRepositoryFiles.scrubSecrets("plain", null));
@@ -360,7 +369,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void relativeRemotePath_equalBackslashAndOutsideBase() {
+    void relativeRemotePath_equalBackslashAndOutsideBase() {
         // Avoid null remotes: FilePath.getName() NPEs when remote is null.
         FilePath base = new FilePath((VirtualChannel) null, "C:\\repo");
         assertEquals("", GitRepositoryFiles.relativeRemotePath(base, base));
@@ -373,33 +382,34 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void readFile_rejectsBlockedHost() {
+    void readFile_rejectsBlockedHost() {
+        GitRepositoryFiles.CloneContext ctx = noWorkspaceCtx();
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.readFile(
                         "http://169.254.169.254/repo.git",
                         "main",
                         "values.yaml",
-                        cloneCtx(null, null, null, null)));
-        String msg = ex.getMessage().toLowerCase();
-        assertTrue(msg.contains("not allowed") || msg.contains("resolv"), msg);
+                        ctx));
+        assertHostRejectMessage(ex);
     }
 
     @Test
-    public void readFile_rejectsUnresolvableHost() {
+    void readFile_rejectsUnresolvableHost() {
+        GitRepositoryFiles.CloneContext ctx = noWorkspaceCtx();
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.readFile(
                         "https://gitlab.example/group/values.git",
                         "main",
                         "values.yaml",
-                        cloneCtx(null, null, null, null)));
-        String msg = ex.getMessage().toLowerCase();
-        assertTrue(msg.contains("resolv") || msg.contains("not allowed"), msg);
+                        ctx));
+        assertHostRejectMessage(ex);
     }
 
     @Test
-    public void listConfigFiles_rejectsBlockedHost() {
+    void listConfigFiles_rejectsBlockedHost() {
+        GitRepositoryFiles.CloneContext ctx = noWorkspaceCtx();
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.listConfigFiles(
@@ -407,13 +417,13 @@ public class GitRepositoryFilesTest {
                         "main",
                         "configs",
                         "**/*",
-                        cloneCtx(null, null, null, null)));
-        String msg = ex.getMessage().toLowerCase();
-        assertTrue(msg.contains("not allowed") || msg.contains("resolv"), msg);
+                        ctx));
+        assertHostRejectMessage(ex);
     }
 
     @Test
-    public void listConfigFiles_rejectsUnresolvableHost() {
+    void listConfigFiles_rejectsUnresolvableHost() {
+        GitRepositoryFiles.CloneContext ctx = noWorkspaceCtx();
         IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
                 () -> GitRepositoryFiles.listConfigFiles(
@@ -421,13 +431,12 @@ public class GitRepositoryFilesTest {
                         "main",
                         "configs",
                         "**/*",
-                        cloneCtx(null, null, null, null)));
-        String msg = ex.getMessage().toLowerCase();
-        assertTrue(msg.contains("resolv") || msg.contains("not allowed"), msg);
+                        ctx));
+        assertHostRejectMessage(ex);
     }
 
     @Test
-    public void readFile_cloneSuccess_returnsContent() throws Exception {
+    void readFile_cloneSuccess_returnsContent() throws Exception {
         allowLoopback();
         FilePath workspace = new FilePath(tempDir.resolve("ws-ok").toFile());
         workspace.mkdirs();
@@ -442,7 +451,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void readFile_cloneSuccess_missingFile() throws Exception {
+    void readFile_cloneSuccess_missingFile() throws Exception {
         allowLoopback();
         FilePath workspace = new FilePath(tempDir.resolve("ws-missing").toFile());
         workspace.mkdirs();
@@ -459,7 +468,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void readFile_cloneSuccess_pathIsDirectory() throws Exception {
+    void readFile_cloneSuccess_pathIsDirectory() throws Exception {
         allowLoopback();
         FilePath workspace = new FilePath(tempDir.resolve("ws-dir").toFile());
         workspace.mkdirs();
@@ -478,7 +487,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void readFile_cloneFailure_truncatesLongStderrAndScrubs() throws Exception {
+    void readFile_cloneFailure_truncatesLongStderrAndScrubs() throws Exception {
         allowLoopback();
         FilePath workspace = new FilePath(tempDir.resolve("ws-fail").toFile());
         workspace.mkdirs();
@@ -501,7 +510,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void readFile_cloneFailure_blankStderrOmitsDetail() throws Exception {
+    void readFile_cloneFailure_blankStderrOmitsDetail() throws Exception {
         allowLoopback();
         FilePath workspace = new FilePath(tempDir.resolve("ws-blank").toFile());
         workspace.mkdirs();
@@ -518,7 +527,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void listConfigFiles_cloneSuccess_listsConfigs() throws Exception {
+    void listConfigFiles_cloneSuccess_listsConfigs() throws Exception {
         allowLoopback();
         FilePath workspace = new FilePath(tempDir.resolve("ws-configs").toFile());
         workspace.mkdirs();
@@ -540,7 +549,7 @@ public class GitRepositoryFilesTest {
     }
 
     @Test
-    public void listConfigFiles_cloneFailure_usesConfigLabel() throws Exception {
+    void listConfigFiles_cloneFailure_usesConfigLabel() throws Exception {
         allowLoopback();
         FilePath workspace = new FilePath(tempDir.resolve("ws-cfg-fail").toFile());
         workspace.mkdirs();

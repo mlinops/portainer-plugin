@@ -13,6 +13,7 @@ public final class VaultNone extends VaultConnection {
 
     @DataBoundConstructor
     public VaultNone() {
+        // Stapler / Pipeline vaultNone(); no bound fields.
     }
 
     @Override

@@ -41,6 +41,7 @@ final class PortainerClient implements AutoCloseable {
     private static final String LACKS_PERMISSION = "lacks permission";
     private static final String API_ENDPOINTS = "/api/endpoints/";
     private static final String API_STACKS = "/api/stacks/";
+    private static final String API_KUBERNETES = "/api/kubernetes/";
     private static final String QUERY_ENDPOINT_ID = "?endpointId=";
     private static final String HTTP_STATUS_PREFIX = "HTTP ";
     private static final String HTTP_DELETE = "DELETE";
@@ -55,7 +56,7 @@ final class PortainerClient implements AutoCloseable {
     private static final String JSON_REPOSITORY_PASSWORD = "RepositoryPassword";
     /** Portainer kubectl apply repeats this prefix once per object. */
     private static final Pattern APPLY_RESOURCE_PREFIX =
-            Pattern.compile("(?i)\\s*failed to apply resource:\\s*");
+            Pattern.compile("(?i)failed to apply resource:");
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     private final int readTimeoutMs;
@@ -286,17 +287,23 @@ final class PortainerClient implements AutoCloseable {
         }
         List<EnvPair> out = new ArrayList<>();
         for (JsonNode n : env) {
-            if (n == null || n.isNull() || !n.isObject()) {
-                continue;
+            EnvPair pair = envPair(n);
+            if (pair != null) {
+                out.add(pair);
             }
-            String name = firstNonBlank(text(n, "name"), text(n, "Name"));
-            if (name.isBlank()) {
-                continue;
-            }
-            String value = firstNonBlank(text(n, "value"), text(n, "Value"));
-            out.add(new EnvPair(name, value));
         }
         return out;
+    }
+
+    private static EnvPair envPair(JsonNode n) {
+        if (n == null || n.isNull() || !n.isObject()) {
+            return null;
+        }
+        String name = firstNonBlank(text(n, "name"), text(n, "Name"));
+        if (name.isBlank()) {
+            return null;
+        }
+        return new EnvPair(name, firstNonBlank(text(n, "value"), text(n, "Value")));
     }
 
     /**
@@ -511,7 +518,7 @@ final class PortainerClient implements AutoCloseable {
         String ns = namespace.trim();
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
         String encoded = java.net.URLEncoder.encode(ns, StandardCharsets.UTF_8).replace("+", "%20");
-        String getUrl = base + "/api/kubernetes/" + endpointId + "/namespaces/" + encoded
+        String getUrl = base + API_KUBERNETES + endpointId + "/namespaces/" + encoded
                 + "?withResourceQuota=false";
         try {
             httpJson("GET", getUrl, apiKey, null, "get namespace");
@@ -523,7 +530,7 @@ final class PortainerClient implements AutoCloseable {
         }
         ObjectNode body = MAPPER.createObjectNode();
         body.put("Name", ns);
-        String createUrl = base + "/api/kubernetes/" + endpointId + "/namespaces";
+        String createUrl = base + API_KUBERNETES + endpointId + "/namespaces";
         try {
             httpJson("POST", createUrl, apiKey, body, "create namespace");
             return "created";
@@ -540,7 +547,7 @@ final class PortainerClient implements AutoCloseable {
      */
     JsonNode listApplications(String baseUrl, String apiKey, int endpointId) throws IOException {
         String base = PortainerUrl.normalizeBaseUrl(baseUrl);
-        String url = base + "/api/kubernetes/" + endpointId + "/applications";
+        String url = base + API_KUBERNETES + endpointId + "/applications";
         JsonNode apps = httpJson("GET", url, apiKey, null, "list applications");
         if (!apps.isArray()) {
             throw new IOException("Portainer GET applications did not return an array");
@@ -575,7 +582,7 @@ final class PortainerClient implements AutoCloseable {
             }
         }
         if (!stackName.isBlank()) {
-            String name = firstNonBlank(text(app, "StackName"), text(app, "Name"));
+            String name = firstNonBlank(text(app, JSON_STACK_NAME), text(app, "Name"));
             if (stackName.equals(name)) {
                 return true;
             }
@@ -1322,26 +1329,24 @@ final class PortainerClient implements AutoCloseable {
         }
         StringBuilder joined = new StringBuilder();
         for (JsonNode item : errors) {
-            appendErrorArrayItem(joined, item);
+            if (item != null && !item.isNull()) {
+                appendJoined(joined, item.asText("").trim());
+            }
         }
-        if (joined.length() == 0) {
+        if (joined.isEmpty()) {
             return null;
         }
         return truncateDetail(sanitizeErrorDetail(joined.toString()));
     }
 
-    private static void appendErrorArrayItem(StringBuilder joined, JsonNode item) {
-        if (item == null || item.isNull()) {
-            return;
-        }
-        String part = item.asText("").trim();
+    private static void appendJoined(StringBuilder sb, String part) {
         if (part.isEmpty()) {
             return;
         }
-        if (joined.length() > 0) {
-            joined.append("; ");
+        if (!sb.isEmpty()) {
+            sb.append("; ");
         }
-        joined.append(part);
+        sb.append(part);
     }
 
     /** Merge Portainer JSON error fields without dropping {@code details} behind a generic {@code message}. */
@@ -1395,16 +1400,9 @@ final class PortainerClient implements AutoCloseable {
         String head = parts[0].trim();
         StringBuilder resources = new StringBuilder();
         for (int i = 1; i < parts.length; i++) {
-            String part = parts[i].trim();
-            if (part.isEmpty()) {
-                continue;
-            }
-            if (resources.length() > 0) {
-                resources.append("; ");
-            }
-            resources.append(part);
+            appendJoined(resources, parts[i].trim());
         }
-        if (resources.length() == 0) {
+        if (resources.isEmpty()) {
             return head;
         }
         if (head.isEmpty()) {

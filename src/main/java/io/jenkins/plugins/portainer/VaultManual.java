@@ -41,7 +41,7 @@ public final class VaultManual extends VaultConnection.Kv {
 
     @Extension(ordinal = 10)
     @Symbol("vaultManual")
-    public static final class DescriptorImpl extends hudson.model.Descriptor<VaultConnection> {
+    public static final class DescriptorImpl extends VaultConnection.KvDescriptor {
 
         @Override
         public String getDisplayName() {
@@ -52,24 +52,6 @@ public final class VaultManual extends VaultConnection.Kv {
         public FormValidation doCheckVaultUrl(@QueryParameter String value, @AncestorInPath Item item) {
             PortainerConnections.checkConfigure(item);
             return VaultConnection.checkUrl(value);
-        }
-
-        @POST
-        public FormValidation doCheckVaultPath(@QueryParameter String value, @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            return VaultConnection.checkPath(value);
-        }
-
-        @POST
-        public FormValidation doCheckVaultMount(@QueryParameter String value, @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            return VaultConnection.checkMount(value);
-        }
-
-        @POST
-        public FormValidation doCheckVaultVersion(@QueryParameter String value, @AncestorInPath Item item) {
-            PortainerConnections.checkConfigure(item);
-            return VaultConnection.checkVersion(value);
         }
 
         @POST

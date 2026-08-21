@@ -17,7 +17,6 @@ import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
-import jenkins.tasks.SimpleBuildStep;
 import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
@@ -43,7 +42,7 @@ import java.util.logging.Logger;
  * Vault overlay: nested {@link VaultConnection} ({@code vaultNone} / {@code vaultInherit} /
  * {@code vaultManual}). Default Not connected. Path/mount apply when Inherit or Manual.
  */
-public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
+public class PortainerStackBuilder extends AbstractVaultStep {
 
     private static final Logger LOGGER = Logger.getLogger(PortainerStackBuilder.class.getName());
 
@@ -98,20 +97,6 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     private String portainerCredentialsId;
 
     /**
-     * Nested Vault connection. Null loads as {@link VaultNone} (and from legacy flat fields in
-     * {@link #readResolve()}).
-     */
-    private VaultConnection vault;
-    /** Former persisted field; migrated in {@link #readResolve()}. */
-    private String vaultConnectionMode;
-    private String vaultUrl;
-    private String vaultAppRoleCredentialsId;
-    private String vaultPath;
-    private String vaultMount;
-    private String vaultNamespace;
-    private String vaultVersion;
-
-    /**
      * When true, also write DEBUG HTTP/timing lines to the build console.
      * Default false — DEBUG stays on JUL FINE only.
      */
@@ -132,25 +117,7 @@ public class PortainerStackBuilder extends Builder implements SimpleBuildStep {
     }
 
     private Object readResolve() {
-        if (vault == null) {
-            vault = VaultConnection.fromLegacy(
-                    vaultConnectionMode,
-                    vaultUrl,
-                    vaultAppRoleCredentialsId,
-                    vaultPath,
-                    vaultMount,
-                    vaultNamespace,
-                    vaultVersion,
-                    false);
-        }
-        vaultConnectionMode = null;
-        vaultUrl = null;
-        vaultAppRoleCredentialsId = null;
-        vaultPath = null;
-        vaultMount = null;
-        vaultNamespace = null;
-        vaultVersion = null;
-        return this;
+        return readResolveVault(false);
     }
 
     public String getEndpointId() {

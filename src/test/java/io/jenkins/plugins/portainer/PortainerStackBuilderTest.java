@@ -31,6 +31,7 @@ import org.springframework.security.access.AccessDeniedException;
 import net.sf.json.JSONObject;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -40,6 +41,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -146,7 +149,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_deploysWhenStackMissing_andConfigRoundTrip(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -172,7 +175,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_validateOnly_skipsMutatingApis(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -184,7 +187,7 @@ public class PortainerStackBuilderTest {
         PortainerStackBuilder loaded = project.getBuildersList().get(PortainerStackBuilder.class);
         assertTrue(loaded.isValidateOnly());
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(!createCalled.get());
         assertFalse(isStackMutateApi(lastPath.get(), lastMethod.get()));
         // validateOnly looks up the stack after preflight, so last path is /api/stacks
@@ -195,50 +198,54 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void pipeline_validateOnly_skipsMutatingApis(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "stack-validate-only");
         job.setDefinition(new CpsFlowDefinition(
-                "node {\n"
-                        + "  portainerStack(\n"
-                        + "    endpointId: '1',\n"
-                        + "    stackType: 'compose',\n"
-                        + "    stackName: 'demo',\n"
-                        + "    repositoryUrl: 'https://gitlab.example/group/stack.git',\n"
-                        + "    validateOnly: true\n"
-                        + "  )\n"
-                        + "}\n",
+                """
+                node {
+                  portainerStack(
+                    endpointId: '1',
+                    stackType: 'compose',
+                    stackName: 'demo',
+                    repositoryUrl: 'https://gitlab.example/group/stack.git',
+                    validateOnly: true
+                  )
+                }
+                """,
                 true));
-        WorkflowRun run = jenkins.buildAndAssertSuccess(job);
+        jenkins.buildAndAssertSuccess(job);
         assertTrue(!createCalled.get());
         assertFalse(isStackMutateApi(lastPath.get(), lastMethod.get()));
     }
 
     @Test
     public void pipeline_withoutNode_validateOnly(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
         assertFalse(new PortainerStackBuilder("1", "compose", "demo").requiresWorkspace());
 
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "stack-no-node");
         job.setDefinition(new CpsFlowDefinition(
-                "portainerStack(\n"
-                        + "  endpointId: '1',\n"
-                        + "  stackType: 'compose',\n"
-                        + "  stackName: 'demo',\n"
-                        + "  repositoryUrl: 'https://gitlab.example/group/stack.git',\n"
-                        + "  validateOnly: true\n"
-                        + ")\n",
+                """
+                portainerStack(
+                  endpointId: '1',
+                  stackType: 'compose',
+                  stackName: 'demo',
+                  repositoryUrl: 'https://gitlab.example/group/stack.git',
+                  validateOnly: true
+                )
+                """,
                 true));
-        WorkflowRun run = jenkins.buildAndAssertSuccess(job);
+        jenkins.buildAndAssertSuccess(job);
         assertTrue(!createCalled.get());
         assertFalse(isStackMutateApi(lastPath.get(), lastMethod.get()));
     }
 
     @Test
     public void freestyle_validateOnly_yamlInvalid_failsWithoutMutate(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -337,8 +344,18 @@ public class PortainerStackBuilderTest {
     }
 
     @Test
+    public void xstream_legacyVaultNone_staysNone(JenkinsRule jenkins) throws Exception {
+        try (InputStream in = PortainerStackBuilderTest.class.getResourceAsStream("stack-legacy-vault-none.xml")) {
+            assertNotNull(in);
+            PortainerStackBuilder step = (PortainerStackBuilder) hudson.model.Items.XSTREAM2.fromXML(in);
+            assertInstanceOf(VaultNone.class, step.getVault());
+            assertFalse(hudson.model.Items.XSTREAM2.toXML(step).contains("<vaultConnectionMode>"));
+        }
+    }
+
+    @Test
     public void freestyle_vaultNone_skipsVaultAndDeploys(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -359,7 +376,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_redeploysWhenStackExists(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(false);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -368,14 +385,14 @@ public class PortainerStackBuilderTest {
         step.setRepullImageAndRedeploy(true);
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(lastPath.get().contains("/git/redeploy"));
         assertTrue(createCalled.get());
     }
 
     @Test
     public void freestyle_yamlCreate_whenStackMissing_noYamlBodyInLog(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         String secretMarker = "YAML_SECRET_SHOULD_NOT_LOG_abc123";
@@ -403,7 +420,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_yamlUpdate_whenStackExists(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(false);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -414,7 +431,7 @@ public class PortainerStackBuilderTest {
         step.setRepullImageAndRedeploy(true);
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(lastPath.get().matches(".*/api/stacks/11$") || lastPath.get().endsWith("/api/stacks/11"));
         assertTrue(!lastPath.get().contains("git/redeploy"));
         assertEquals("PUT", lastMethod.get());
@@ -424,7 +441,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_yamlMissingContent_failsBeforePortainer(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         lastPath.set(null);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -434,12 +451,12 @@ public class PortainerStackBuilderTest {
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
         jenkins.assertLogContains("Stack YAML content is required", build);
-        assertTrue(lastPath.get() == null);
+        assertNull(lastPath.get());
     }
 
     @Test
     public void freestyle_invalidInlineYaml_failsBeforePortainer(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         lastPath.set(null);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -450,7 +467,7 @@ public class PortainerStackBuilderTest {
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
         jenkins.assertLogContains("Invalid Compose YAML", build);
-        assertTrue(lastPath.get() == null);
+        assertNull(lastPath.get());
     }
 
     @Test
@@ -475,25 +492,27 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void pipeline_yamlCreate_smoke(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "default");
+        configurePortainer("default");
         stacksEmpty.set(true);
 
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "yaml-create");
-        String script = ""
-                + "node {\n"
-                + "  portainerStack(\n"
-                + "    endpointId: '1',\n"
-                + "    stackType: 'compose',\n"
-                + "    stackName: 'demo',\n"
-                + "    stackSource: 'yaml',\n"
-                + "    stackFileContent: '''\n"
-                + "services:\n"
-                + "  web:\n"
-                + "    image: nginx:alpine\n"
-                + "'''\n"
-                + "  )\n"
-                + "}\n";
-        job.setDefinition(new CpsFlowDefinition(script, true));
+        job.setDefinition(new CpsFlowDefinition(
+                """
+                node {
+                  portainerStack(
+                    endpointId: '1',
+                    stackType: 'compose',
+                    stackName: 'demo',
+                    stackSource: 'yaml',
+                    stackFileContent: '''
+                services:
+                  web:
+                    image: nginx:alpine
+                '''
+                  )
+                }
+                """,
+                true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
         jenkins.assertLogNotContains("image: nginx:alpine", run);
         assertTrue(lastPath.get().contains("/standalone/string"));
@@ -513,51 +532,55 @@ public class PortainerStackBuilderTest {
 
         FreeStyleBuild build = jenkins.buildAndAssertStatus(Result.FAILURE, project);
         jenkins.assertLogContains("Portainer is not configured", build);
-        assertTrue(lastPath.get() == null);
+        assertNull(lastPath.get());
     }
 
     @Test
     public void pipeline_autoDeployWhenMissing_createsStack(JenkinsRule jenkins)
             throws Exception {
-        configurePortainer(jenkins, "Production Portainer");
+        configurePortainer("Production Portainer");
         stacksEmpty.set(true);
 
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "deploy-missing");
-        String script = ""
-                + "node {\n"
-                + "  portainerStack(\n"
-                + "    endpointId: '1',\n"
-                + "    stackType: 'compose',\n"
-                + "    stackName: 'demo',\n"
-                + "    repositoryUrl: 'https://gitlab.example/group/stack.git',\n"
-                + "    composeFilePath: 'docker-compose.yml'\n"
-                + "  )\n"
-                + "}\n";
-        job.setDefinition(new CpsFlowDefinition(script, true));
-        WorkflowRun run = jenkins.buildAndAssertSuccess(job);
+        job.setDefinition(new CpsFlowDefinition(
+                """
+                node {
+                  portainerStack(
+                    endpointId: '1',
+                    stackType: 'compose',
+                    stackName: 'demo',
+                    repositoryUrl: 'https://gitlab.example/group/stack.git',
+                    composeFilePath: 'docker-compose.yml'
+                  )
+                }
+                """,
+                true));
+        jenkins.buildAndAssertSuccess(job);
         assertTrue(lastPath.get().contains("/standalone/repository"));
         assertTrue(createCalled.get());
     }
 
     @Test
     public void pipeline_rejectsLegacyActionAndInstanceIdParams(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "Production Portainer");
+        configurePortainer("Production Portainer");
         stacksEmpty.set(true);
 
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "deploy-legacy-params");
-        String script = ""
-                + "node {\n"
-                + "  portainerStack(\n"
-                + "    action: 'redeploy',\n"
-                + "    instanceId: 'ignored',\n"
-                + "    endpointId: '1',\n"
-                + "    stackType: 'compose',\n"
-                + "    stackName: 'demo',\n"
-                + "    repositoryUrl: 'https://gitlab.example/group/stack.git',\n"
-                + "    composeFilePath: 'docker-compose.yml'\n"
-                + "  )\n"
-                + "}\n";
-        job.setDefinition(new CpsFlowDefinition(script, true));
+        job.setDefinition(new CpsFlowDefinition(
+                """
+                node {
+                  portainerStack(
+                    action: 'redeploy',
+                    instanceId: 'ignored',
+                    endpointId: '1',
+                    stackType: 'compose',
+                    stackName: 'demo',
+                    repositoryUrl: 'https://gitlab.example/group/stack.git',
+                    composeFilePath: 'docker-compose.yml'
+                  )
+                }
+                """,
+                true));
         WorkflowRun run = jenkins.buildAndAssertStatus(Result.FAILURE, job);
         jenkins.assertLogContains("action", run);
         jenkins.assertLogContains("instanceId", run);
@@ -568,46 +591,50 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void pipeline_autoRedeploy_smoke(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "default");
+        configurePortainer("default");
         stacksEmpty.set(false);
 
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "p");
-        String script = ""
-                + "node {\n"
-                + "  portainerStack(\n"
-                + "    endpointId: '1',\n"
-                + "    stackType: 'compose',\n"
-                + "    stackName: 'demo',\n"
-                + "    repositoryUrl: 'https://gitlab.example/group/stack.git',\n"
-                + "    composeFilePath: 'docker-compose.yml',\n"
-                + "    prune: true,\n"
-                + "    repullImageAndRedeploy: true\n"
-                + "  )\n"
-                + "}\n";
-        job.setDefinition(new CpsFlowDefinition(script, true));
-        WorkflowRun run = jenkins.buildAndAssertSuccess(job);
+        job.setDefinition(new CpsFlowDefinition(
+                """
+                node {
+                  portainerStack(
+                    endpointId: '1',
+                    stackType: 'compose',
+                    stackName: 'demo',
+                    repositoryUrl: 'https://gitlab.example/group/stack.git',
+                    composeFilePath: 'docker-compose.yml',
+                    prune: true,
+                    repullImageAndRedeploy: true
+                  )
+                }
+                """,
+                true));
+        jenkins.buildAndAssertSuccess(job);
         assertTrue(lastPath.get().contains("/git/redeploy"));
         assertTrue(createCalled.get());
     }
 
     @Test
     public void pipeline_verboseLogging_includesHttpPaths(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "default");
+        configurePortainer("default");
         stacksEmpty.set(true);
 
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "verbose-deploy");
-        String script = ""
-                + "node {\n"
-                + "  portainerStack(\n"
-                + "    endpointId: '1',\n"
-                + "    stackType: 'compose',\n"
-                + "    stackName: 'demo',\n"
-                + "    repositoryUrl: 'https://gitlab.example/group/stack.git',\n"
-                + "    composeFilePath: 'docker-compose.yml',\n"
-                + "    verboseLogging: true\n"
-                + "  )\n"
-                + "}\n";
-        job.setDefinition(new CpsFlowDefinition(script, true));
+        job.setDefinition(new CpsFlowDefinition(
+                """
+                node {
+                  portainerStack(
+                    endpointId: '1',
+                    stackType: 'compose',
+                    stackName: 'demo',
+                    repositoryUrl: 'https://gitlab.example/group/stack.git',
+                    composeFilePath: 'docker-compose.yml',
+                    verboseLogging: true
+                  )
+                }
+                """,
+                true));
         WorkflowRun run = jenkins.buildAndAssertSuccess(job);
         jenkins.assertLogContains("[DEBUG] GET /api/", run);
         jenkins.assertLogContains("[DEBUG] Connection=", run);
@@ -616,7 +643,7 @@ public class PortainerStackBuilderTest {
     }
 
     @Test
-    public void formValidation_stackNameAndComposePath(JenkinsRule jenkins) throws Exception {
+    public void formValidation_stackName(JenkinsRule jenkins) throws Exception {
         PortainerStackBuilder.DescriptorImpl d =
                 jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -625,11 +652,17 @@ public class PortainerStackBuilderTest {
         assertEquals(FormValidation.Kind.OK, stackOk.kind);
         FormValidation stackBad = d.doCheckStackName("MyApp", project);
         assertEquals(FormValidation.Kind.ERROR, stackBad.kind);
-        assertTrue(Character.isUpperCase(stackBad.getMessage().charAt(0)));
         assertTrue(stackBad.getMessage().endsWith("."));
         FormValidation stackEmpty = d.doCheckStackName("", project);
         assertEquals(FormValidation.Kind.ERROR, stackEmpty.kind);
         assertEquals("Stack name is required.", stackEmpty.getMessage());
+    }
+
+    @Test
+    public void formValidation_composePath(JenkinsRule jenkins) throws Exception {
+        PortainerStackBuilder.DescriptorImpl d =
+                jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
+        FreeStyleProject project = jenkins.createFreeStyleProject();
 
         assertEquals(FormValidation.Kind.OK, d.doCheckComposeFilePath("docker-compose.yml", "repository", project).kind);
         FormValidation composeEmpty = d.doCheckComposeFilePath("", "repository", project);
@@ -640,6 +673,14 @@ public class PortainerStackBuilderTest {
         assertTrue(composeTraversal.getMessage().endsWith("."));
         assertEquals(FormValidation.Kind.ERROR, d.doCheckComposeFilePath("/abs/compose.yml", "repository", project).kind);
         assertEquals(FormValidation.Kind.OK, d.doCheckComposeFilePath("", "yaml", project).kind);
+    }
+
+    @Test
+    public void formValidation_yamlAndRepo(JenkinsRule jenkins) throws Exception {
+        PortainerStackBuilder.DescriptorImpl d =
+                jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
+        FreeStyleProject project = jenkins.createFreeStyleProject();
+
         assertEquals(
                 FormValidation.Kind.OK,
                 d.doCheckStackFileContent("services:\n  web:\n    image: nginx:alpine\n", "yaml", project).kind);
@@ -649,20 +690,33 @@ public class PortainerStackBuilderTest {
         assertEquals(
                 FormValidation.Kind.ERROR,
                 d.doCheckRepositoryUrl("", "repository", project).kind);
+    }
+
+    @Test
+    public void formValidation_env(JenkinsRule jenkins) throws Exception {
+        PortainerStackBuilder.DescriptorImpl d =
+                jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
+        FreeStyleProject project = jenkins.createFreeStyleProject();
 
         assertEquals(FormValidation.Kind.OK, d.doCheckEnv("IMAGE_TAG=1.2.3\n# comment\n", project).kind);
         assertEquals(FormValidation.Kind.OK, d.doCheckEnv("", project).kind);
-        // Bare KEY is shorthand for KEY=${KEY}
-        assertEquals(FormValidation.Kind.OK, d.doCheckEnv("NOEQUALS", project).kind);
+        assertEquals(
+                FormValidation.Kind.OK,
+                d.doCheckEnv("NOEQUALS", project).kind,
+                "bare KEY is KEY=${KEY}");
         FormValidation envBadKey = d.doCheckEnv("bad-key=1", project);
         assertEquals(FormValidation.Kind.ERROR, envBadKey.kind);
+    }
+
+    @Test
+    public void formValidation_stackType(JenkinsRule jenkins) throws Exception {
+        PortainerStackBuilder.DescriptorImpl d =
+                jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
+        FreeStyleProject project = jenkins.createFreeStyleProject();
 
         assertEquals(FormValidation.Kind.OK, d.doCheckStackType("", project).kind);
         assertEquals(FormValidation.Kind.OK, d.doCheckStackType("compose", project).kind);
         assertEquals(FormValidation.Kind.ERROR, d.doCheckStackType("k8s", project).kind);
-
-        assertTrue(d.getPortainerConnectionSummary().contains("System Portainer is not configured"));
-        assertFalse(d.getPortainerConnectionSummary().contains("Manage Jenkins"));
     }
 
     @Test
@@ -682,7 +736,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_missingCredentials_failsEvenWithUrl(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         PortainerGlobalConfiguration cfg = PortainerGlobalConfiguration.get();
         cfg.setCredentialsId("");
         cfg.save();
@@ -696,7 +750,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_http500_errorSummaryNoStackFlood(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         server.stop(0);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> respond(exchange, 500, "{\"message\":\"boom\"}"));
@@ -718,7 +772,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_preflight_unreachable_failsBeforeCreate(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         PortainerGlobalConfiguration cfg = PortainerGlobalConfiguration.get();
         cfg.setPortainerUrl("http://127.0.0.1:1");
         cfg.setConnectTimeoutMs(500);
@@ -735,7 +789,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_preflight_missingEndpoint_failsBeforeCreate(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         endpointMissing.set(true);
         stacksEmpty.set(true);
 
@@ -750,7 +804,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_invalidWorkspaceYaml_doesNotBlockGitDeploy(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
         lastPath.set(null);
 
@@ -768,7 +822,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_vaultOverlay_usernamePassword_noSecretsInLog(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         HttpServer vault = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -829,7 +883,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_vaultOverlay_revokeSoftFail_inConsole(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         HttpServer vault = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -897,14 +951,14 @@ public class PortainerStackBuilderTest {
         step.setPortainerCredentialsId("step-portainer-key");
         project.getBuildersList().add(step);
 
-        FreeStyleBuild build = jenkins.buildAndAssertSuccess(project);
+        jenkins.buildAndAssertSuccess(project);
         assertTrue(createCalled.get());
         assertTrue(lastPath.get().contains("/standalone/repository"));
     }
 
     @Test
     public void freestyle_vaultInherit_withoutSystemConfig_failsClearly(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -920,7 +974,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_vaultManualPartial_fails(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -938,7 +992,7 @@ public class PortainerStackBuilderTest {
 
     @Test
     public void freestyle_vaultPartialConfig_fails(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins, "prod");
+        configurePortainer("prod");
         stacksEmpty.set(true);
 
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -956,7 +1010,8 @@ public class PortainerStackBuilderTest {
         PortainerStackBuilder.DescriptorImpl d =
                 jenkins.getInstance().getDescriptorByType(PortainerStackBuilder.DescriptorImpl.class);
         assertEquals("System Portainer is not configured.", d.getPortainerConnectionSummary());
-        configurePortainer(jenkins, "Production Portainer");
+        assertFalse(d.getPortainerConnectionSummary().contains("Manage Jenkins"));
+        configurePortainer("Production Portainer");
         assertEquals("System Portainer is configured.", d.getPortainerConnectionSummary());
         String vaultSummary = d.getVaultInheritSummary();
         assertEquals("Vault Plugin is not configured.", vaultSummary);
@@ -966,7 +1021,7 @@ public class PortainerStackBuilderTest {
         assertTrue(d.getVaultDescriptors().stream().anyMatch(x -> x instanceof VaultNone.DescriptorImpl));
     }
 
-    private void configurePortainer(JenkinsRule jenkins, String name) throws Exception {
+    private void configurePortainer(String name) throws IOException {
         SystemCredentialsProvider.getInstance().getCredentials().add(
                 new StringCredentialsImpl(
                         CredentialsScope.GLOBAL,

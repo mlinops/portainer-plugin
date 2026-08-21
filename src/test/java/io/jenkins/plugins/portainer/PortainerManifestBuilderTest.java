@@ -150,7 +150,7 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void freestyle_createsManifestFromYaml_omitsNamespaceInBody(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerManifestBuilder step = new PortainerManifestBuilder("1", "web");
         step.setStackSource(PortainerManifestBuilder.SOURCE_YAML);
@@ -168,7 +168,7 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void freestyle_updatesWhenLiveResourcesExist(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         stacksEmpty.set(false);
         applicationsEmpty.set(false);
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -184,7 +184,7 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void freestyle_emptyStackName_skipsFindByName(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerManifestBuilder step = new PortainerManifestBuilder("1", "");
         step.setStackSource(PortainerManifestBuilder.SOURCE_YAML);
@@ -198,7 +198,7 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void freestyle_staleStack_failsWithoutUpdate(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         stacksEmpty.set(false);
         applicationsEmpty.set(true);
         FreeStyleProject project = jenkins.createFreeStyleProject();
@@ -216,7 +216,7 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void freestyle_createWithoutLiveResources_fails(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         applicationsEmpty.set(true);
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerManifestBuilder step = new PortainerManifestBuilder("1", "web");
@@ -232,7 +232,7 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void freestyle_validateOnly_skipsMutatingApis(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerManifestBuilder step = new PortainerManifestBuilder("1", "web");
         step.setStackSource(PortainerManifestBuilder.SOURCE_YAML);
@@ -247,17 +247,19 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void pipeline_createsManifestFromRepository(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "manifest-pipe");
         job.setDefinition(new CpsFlowDefinition(
-                "node {\n"
-                        + "  portainerManifest(\n"
-                        + "    endpointId: '1',\n"
-                        + "    stackName: 'web',\n"
-                        + "    repositoryUrl: 'https://gitlab.example/group/manifests.git',\n"
-                        + "    manifestFilePath: 'deploy.yaml'\n"
-                        + "  )\n"
-                        + "}\n",
+                """
+                node {
+                  portainerManifest(
+                    endpointId: '1',
+                    stackName: 'web',
+                    repositoryUrl: 'https://gitlab.example/group/manifests.git',
+                    manifestFilePath: 'deploy.yaml'
+                  )
+                }
+                """,
                 true));
         jenkins.buildAndAssertSuccess(job);
         assertTrue(createCalled.get());
@@ -269,17 +271,19 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void pipeline_validateOnly_withoutNode(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         assertFalse(new PortainerManifestBuilder("1", "web").requiresWorkspace());
         WorkflowJob job = jenkins.createProject(WorkflowJob.class, "manifest-no-node");
         job.setDefinition(new CpsFlowDefinition(
-                "portainerManifest(\n"
-                        + "  endpointId: '1',\n"
-                        + "  stackName: 'web',\n"
-                        + "  stackSource: 'yaml',\n"
-                        + "  stackFileContent: 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: demo\\n',\n"
-                        + "  validateOnly: true\n"
-                        + ")\n",
+                """
+                portainerManifest(
+                  endpointId: '1',
+                  stackName: 'web',
+                  stackSource: 'yaml',
+                  stackFileContent: 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: demo\\n',
+                  validateOnly: true
+                )
+                """,
                 true));
         jenkins.buildAndAssertSuccess(job);
         assertFalse(createCalled.get());
@@ -287,7 +291,7 @@ public class PortainerManifestBuilderTest {
 
     @Test
     public void freestyle_rejectsDockerEndpoint(JenkinsRule jenkins) throws Exception {
-        configurePortainer(jenkins);
+        configurePortainer();
         endpointType.set(1);
         FreeStyleProject project = jenkins.createFreeStyleProject();
         PortainerManifestBuilder step = new PortainerManifestBuilder("1", "web");
@@ -323,7 +327,7 @@ public class PortainerManifestBuilderTest {
         assertEquals(FormValidation.Kind.OK, d.doCheckStackFileContent(MANIFEST_YAML, "yaml", project).kind);
     }
 
-    private void configurePortainer(JenkinsRule jenkins) throws Exception {
+    private void configurePortainer() {
         SystemCredentialsProvider.getInstance()
                 .getCredentials()
                 .add(new StringCredentialsImpl(
